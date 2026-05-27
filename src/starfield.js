@@ -24,6 +24,18 @@ const DEFAULT_ADAPTIVE_QUALITY = Object.freeze({
   patchBudgetMb: 128,
   centerBias: 0.5,
 });
+const PATCH_STATES = Object.freeze({
+  EMPTY: "empty",
+  QUEUED: "queued",
+  BAKING: "baking",
+  RESIDENT: "resident",
+  STALE: "stale",
+  EVICTING: "evicting",
+});
+const ALLOCATION_STATES = Object.freeze({
+  UNALLOCATED: "unallocated",
+  ALLOCATED: "allocated",
+});
 
 function sphereVerticalSegmentsFor(horizontalSegments) {
   return Math.max(8, Math.floor(horizontalSegments / 2));
@@ -558,21 +570,15 @@ export function createStarfield({ renderer, scene, requestRender }) {
     );
   }
 
-  function createPatchDomeMaterial(patch, layout) {
+  function createPatchDomeMaterial(descriptor, layout) {
     const innerOffset = new THREE.Vector2(layout.guard / layout.storageWidth, layout.guard / layout.storageHeight);
     const innerScale = new THREE.Vector2(layout.contentWidth / layout.storageWidth, layout.contentHeight / layout.storageHeight);
-    const contentUvMin = new THREE.Vector2(
-      (patch.x * layout.contentWidth) / layout.virtualWidth,
-      (patch.y * layout.contentHeight) / layout.virtualHeight,
-    );
-    const contentUvSize = new THREE.Vector2(
-      layout.contentWidth / layout.virtualWidth,
-      layout.contentHeight / layout.virtualHeight,
-    );
+    const contentUvMin = descriptor.uvMin.clone();
+    const contentUvSize = descriptor.uvSize.clone();
 
     return new THREE.ShaderMaterial({
       uniforms: {
-        uSkyTexture: { value: patch.target.texture },
+        uSkyTexture: { value: descriptor.target.texture },
         uContentUvMin: { value: contentUvMin },
         uContentUvSize: { value: contentUvSize },
         uInnerOffset: { value: innerOffset },
@@ -620,13 +626,14 @@ export function createStarfield({ renderer, scene, requestRender }) {
     });
   }
 
-  function createPatchDomeMesh(patch, layout) {
+  function createPatchDomeMesh(descriptor, layout) {
     const geometry = createDomeGeometry();
-    const material = createPatchDomeMaterial(patch, layout);
+    const material = createPatchDomeMaterial(descriptor, layout);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.frustumCulled = false;
-    patch.mesh = mesh;
-    patch.material = material;
+    mesh.userData.patchDescriptorId = descriptor.id;
+    descriptor.mesh = mesh;
+    descriptor.material = material;
     return mesh;
   }
 
@@ -667,31 +674,102 @@ export function createStarfield({ renderer, scene, requestRender }) {
     });
   }
 
-  function createPatchRenderTargets(layout) {
-    const patches = [];
+  function createPatchDescriptor(layout, x, y) {
+    const uvMin = new THREE.Vector2(
+      (x * layout.contentWidth) / layout.virtualWidth,
+      (y * layout.contentHeight) / layout.virtualHeight,
+    );
+    const uvSize = new THREE.Vector2(
+      layout.contentWidth / layout.virtualWidth,
+      layout.contentHeight / layout.virtualHeight,
+    );
+    const storageUvMin = new THREE.Vector2(
+      (x * layout.contentWidth - layout.guard) / layout.virtualWidth,
+      (y * layout.contentHeight - layout.guard) / layout.virtualHeight,
+    );
+    const storageUvSize = new THREE.Vector2(
+      layout.storageWidth / layout.virtualWidth,
+      layout.storageHeight / layout.virtualHeight,
+    );
+    const angularWidthRad = (Math.PI * 2) / layout.columns;
+    const angularHeightRad = Math.PI / layout.rows;
+
+    return {
+      id: `${layout.virtualWidth}x${layout.virtualHeight}:${x},${y}`,
+      x,
+      y,
+      uvMin,
+      uvSize,
+      storageUvMin,
+      storageUvSize,
+      angularWidthRad,
+      angularHeightRad,
+      angularWidthDeg: THREE.MathUtils.radToDeg(angularWidthRad),
+      angularHeightDeg: THREE.MathUtils.radToDeg(angularHeightRad),
+      screenDemand: {
+        projectedWidthPixels: 0,
+        projectedHeightPixels: 0,
+        projectedPixels: 0,
+      },
+      requiredSize: {
+        width: layout.contentWidth,
+        height: layout.contentHeight,
+      },
+      currentSize: {
+        width: layout.contentWidth,
+        height: layout.contentHeight,
+      },
+      targetSize: {
+        width: layout.contentWidth,
+        height: layout.contentHeight,
+      },
+      storageSize: {
+        width: layout.storageWidth,
+        height: layout.storageHeight,
+      },
+      priority: 0,
+      state: PATCH_STATES.EMPTY,
+      target: null,
+      mesh: null,
+      material: null,
+      estimatedStarCount: 0,
+      projectedPixels: 0,
+      starsPerProjectedPixel: 0,
+      densityScale: 1,
+      brightStarCount: 0,
+      allocationState: ALLOCATION_STATES.UNALLOCATED,
+    };
+  }
+
+  function createPatchDescriptors(layout) {
+    const descriptors = [];
     const horizontalWrap = layout.columns === 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
 
     for (let y = 0; y < layout.rows; y += 1) {
       for (let x = 0; x < layout.columns; x += 1) {
-        patches.push({
-          x,
-          y,
-          target: createRenderTarget(layout.storageWidth, layout.storageHeight, {
-            name: `Baked skydome patch ${x + 1},${y + 1}`,
-            wrapS: horizontalWrap,
-          }),
-          mesh: null,
-          material: null,
+        const descriptor = createPatchDescriptor(layout, x, y);
+        descriptor.target = createRenderTarget(layout.storageWidth, layout.storageHeight, {
+          name: `Baked skydome patch ${x + 1},${y + 1}`,
+          wrapS: horizontalWrap,
         });
+        descriptor.allocationState = ALLOCATION_STATES.ALLOCATED;
+        descriptors.push(descriptor);
       }
     }
 
-    return patches;
+    return descriptors;
   }
 
-  function disposePatchRenderTargets(patches) {
-    patches.forEach((patch) => {
-      patch.target.dispose();
+  function disposePatchDescriptors(descriptors) {
+    descriptors.forEach((descriptor) => {
+      descriptor.state = PATCH_STATES.EVICTING;
+      if (descriptor.target) {
+        descriptor.target.dispose();
+        descriptor.target = null;
+      }
+      descriptor.mesh = null;
+      descriptor.material = null;
+      descriptor.allocationState = ALLOCATION_STATES.UNALLOCATED;
     });
   }
 
@@ -704,17 +782,17 @@ export function createStarfield({ renderer, scene, requestRender }) {
     }
   }
 
-  function rebuildBakedDomeMeshes(patches, layout) {
+  function rebuildBakedDomeMeshes(descriptors, layout) {
     disposeBakedDomeMeshes();
-    patches.forEach((patch) => {
-      bakedDomeGroup.add(createPatchDomeMesh(patch, layout));
+    descriptors.forEach((descriptor) => {
+      bakedDomeGroup.add(createPatchDomeMesh(descriptor, layout));
     });
   }
 
   let currentBakeWidth = defaults.bakeWidth;
   let currentPatchLayout = createPatchLayout(currentBakeWidth);
   let currentSupersample = autoSupersampleForLayout(currentPatchLayout);
-  let renderTargets = createPatchRenderTargets(currentPatchLayout);
+  let patchDescriptors = createPatchDescriptors(currentPatchLayout);
   let supersampleTarget = createAccumulationTarget(precisionWidthForLayout(currentPatchLayout), precisionHeightForLayout(currentPatchLayout));
   let bakeTimer = 0;
   let currentCameraInfo = {
@@ -726,7 +804,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     cssHeight: 1,
     pixelRatio: 1,
   };
-  rebuildBakedDomeMeshes(renderTargets, currentPatchLayout);
+  rebuildBakedDomeMeshes(patchDescriptors, currentPatchLayout);
 
   function setBakeStatus(label, disabled = false) {
     bakeStatusHandler(label, disabled);
@@ -829,7 +907,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function computeMemoryReadouts(demand = computeDemandReadouts()) {
-    const patchCount = Math.max(1, currentPatchLayout.columns * currentPatchLayout.rows);
+    const patchCount = Math.max(1, patchDescriptors.length);
     const residentTextureBytes = estimateTextureBytes(
       currentPatchLayout.storageWidth,
       currentPatchLayout.storageHeight,
@@ -877,9 +955,68 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
+  function updatePatchDescriptorDemand(demand) {
+    patchDescriptors.forEach((descriptor) => {
+      descriptor.angularWidthRad = demand.patchAngularWidthRad;
+      descriptor.angularHeightRad = demand.patchAngularHeightRad;
+      descriptor.angularWidthDeg = demand.patchAngularWidthDeg;
+      descriptor.angularHeightDeg = demand.patchAngularHeightDeg;
+      descriptor.screenDemand = {
+        projectedWidthPixels: demand.projectedPatchWidthPixels,
+        projectedHeightPixels: demand.projectedPatchHeightPixels,
+        projectedPixels: demand.projectedPatchPixels,
+      };
+      descriptor.requiredSize = {
+        width: demand.requiredPatchTexelsX,
+        height: demand.requiredPatchTexelsY,
+      };
+      descriptor.currentSize = {
+        width: currentPatchLayout.contentWidth,
+        height: currentPatchLayout.contentHeight,
+      };
+      descriptor.targetSize = {
+        width: demand.recommendedActualPatchWidth,
+        height: demand.recommendedActualPatchHeight,
+      };
+      descriptor.estimatedStarCount = demand.estimatedStarsPerPatch;
+      descriptor.projectedPixels = demand.projectedPatchPixels;
+      descriptor.starsPerProjectedPixel = demand.starsPerProjectedPixel;
+      descriptor.densityScale = demand.densityScale;
+      descriptor.brightStarCount = demand.brightStarCount;
+    });
+  }
+
+  function patchDescriptorSummary() {
+    const states = {};
+    const allocationStates = {};
+
+    patchDescriptors.forEach((descriptor) => {
+      states[descriptor.state] = (states[descriptor.state] ?? 0) + 1;
+      allocationStates[descriptor.allocationState] = (allocationStates[descriptor.allocationState] ?? 0) + 1;
+    });
+
+    const formatCounts = (counts) => Object.entries(counts)
+      .map(([key, value]) => `${key}:${value}`)
+      .join(", ");
+
+    return {
+      patchDescriptorCount: patchDescriptors.length,
+      descriptorCount: patchDescriptors.length,
+      residentPatchCount: patchDescriptors.filter((descriptor) => descriptor.state === PATCH_STATES.RESIDENT).length,
+      allocatedPatchCount: patchDescriptors.filter((descriptor) => descriptor.allocationState === ALLOCATION_STATES.ALLOCATED).length,
+      patchStateCounts: states,
+      patchStateSummary: formatCounts(states) || "none",
+      allocationStateCounts: allocationStates,
+      allocationStateSummary: formatCounts(allocationStates) || "none",
+      descriptorDensityPressure: patchDescriptors.reduce((maxPressure, descriptor) => Math.max(maxPressure, descriptor.starsPerProjectedPixel), 0),
+      descriptorDensityFallbackCount: patchDescriptors.filter((descriptor) => descriptor.densityScale < 1).length,
+    };
+  }
+
   function updateDemandStats() {
     const demand = computeDemandReadouts();
-    Object.assign(stats, demand, computeMemoryReadouts(demand));
+    updatePatchDescriptorDemand(demand);
+    Object.assign(stats, demand, computeMemoryReadouts(demand), patchDescriptorSummary());
   }
 
   function updatePatchStats() {
@@ -905,13 +1042,32 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function rebuildDisplayGeometry() {
-    rebuildBakedDomeMeshes(renderTargets, currentPatchLayout);
+    rebuildBakedDomeMeshes(patchDescriptors, currentPatchLayout);
     updateSphereSegmentStats();
     requestRender();
   }
 
+  function markPatchDescriptorsQueued() {
+    patchDescriptors.forEach((descriptor) => {
+      if (descriptor.allocationState === ALLOCATION_STATES.ALLOCATED) {
+        descriptor.state = PATCH_STATES.QUEUED;
+      }
+    });
+    updateDemandStats();
+  }
+
+  function markPatchDescriptorsStale() {
+    patchDescriptors.forEach((descriptor) => {
+      if (descriptor.state === PATCH_STATES.RESIDENT) {
+        descriptor.state = PATCH_STATES.STALE;
+      }
+    });
+    updateDemandStats();
+  }
+
   function bakeSkydome() {
     clearTimeout(bakeTimer);
+    markPatchDescriptorsQueued();
     setBakeStatus("Baking", true);
 
     requestAnimationFrame(() => {
@@ -932,16 +1088,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
       renderer.autoClear = true;
       renderer.setClearColor(0x000000, 0);
 
-      renderTargets.forEach((patch, index) => {
-        setBakeStatus(`Baking ${index + 1}/${renderTargets.length}`, true);
-        bakeUniforms.uTileUvMin.value.set(
-          (patch.x * currentPatchLayout.contentWidth - currentPatchLayout.guard) / currentPatchLayout.virtualWidth,
-          (patch.y * currentPatchLayout.contentHeight - currentPatchLayout.guard) / currentPatchLayout.virtualHeight,
-        );
-        bakeUniforms.uTileUvSize.value.set(
-          currentPatchLayout.storageWidth / currentPatchLayout.virtualWidth,
-          currentPatchLayout.storageHeight / currentPatchLayout.virtualHeight,
-        );
+      patchDescriptors.forEach((descriptor, index) => {
+        descriptor.state = PATCH_STATES.BAKING;
+        setBakeStatus(`Baking ${index + 1}/${patchDescriptors.length}`, true);
+        bakeUniforms.uTileUvMin.value.copy(descriptor.storageUvMin);
+        bakeUniforms.uTileUvSize.value.copy(descriptor.storageUvSize);
 
         renderer.setRenderTarget(supersampleTarget);
         renderer.clear();
@@ -951,9 +1102,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
         downsampleUniforms.uSourceSize.value.set(internalWidth, internalHeight);
         downsampleUniforms.uTargetSize.value.set(currentPatchLayout.storageWidth, currentPatchLayout.storageHeight);
         downsampleUniforms.uSourcePerTarget.value = sourcePerTarget;
-        renderer.setRenderTarget(patch.target);
+        renderer.setRenderTarget(descriptor.target);
         renderer.clear();
         renderer.render(downsampleScene, bakeCamera);
+        descriptor.state = PATCH_STATES.RESIDENT;
       });
 
       renderer.setRenderTarget(previousTarget);
@@ -976,15 +1128,15 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function setBakeWidth(width) {
     if (width === currentBakeWidth) return;
 
-    const previousTargets = renderTargets;
+    const previousDescriptors = patchDescriptors;
     const previousSupersampleTarget = supersampleTarget;
     currentBakeWidth = width;
     currentPatchLayout = createPatchLayout(currentBakeWidth);
     currentSupersample = autoSupersampleForLayout(currentPatchLayout);
-    renderTargets = createPatchRenderTargets(currentPatchLayout);
+    patchDescriptors = createPatchDescriptors(currentPatchLayout);
     supersampleTarget = createAccumulationTarget(precisionWidthForLayout(currentPatchLayout), precisionHeightForLayout(currentPatchLayout));
-    rebuildBakedDomeMeshes(renderTargets, currentPatchLayout);
-    disposePatchRenderTargets(previousTargets);
+    rebuildBakedDomeMeshes(patchDescriptors, currentPatchLayout);
+    disposePatchDescriptors(previousDescriptors);
     previousSupersampleTarget.dispose();
     updatePatchStats();
     notifyReadouts();
@@ -998,6 +1150,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     if (CATALOG_PARAMS.has(key)) {
       markCatalogDirty();
     }
+    markPatchDescriptorsStale();
     updateDemandStats();
     notifyReadouts();
     scheduleBake(delay);
@@ -1032,12 +1185,15 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function reseed() {
     bakeUniforms.uSeed.value = Math.random() * 1000;
     markCatalogDirty();
+    markPatchDescriptorsStale();
     scheduleBake(0);
   }
 
   function getReadouts() {
     const demand = computeDemandReadouts();
+    updatePatchDescriptorDemand(demand);
     const memory = computeMemoryReadouts(demand);
+    const descriptors = patchDescriptorSummary();
     return {
       bakeWidth: currentBakeWidth,
       supportedBakeWidths: supportedBakeWidths(),
@@ -1049,6 +1205,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
       adaptive: { ...adaptiveQuality },
       demand,
       memory,
+      descriptors,
     };
   }
 
@@ -1074,10 +1231,13 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
     const demand = computeDemandReadouts();
     const memory = computeMemoryReadouts(demand);
+    updatePatchDescriptorDemand(demand);
+    const descriptors = patchDescriptorSummary();
     const result = {
       ...stats,
       ...demand,
       ...memory,
+      ...descriptors,
       frame: rendererInfo.render.frame,
       drawCalls: rendererInfo.render.calls,
       callFrames: `${rendererInfo.render.calls}/${rendererInfo.render.frame}`,
@@ -1090,7 +1250,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
       shaderPrograms: rendererInfo.programs?.length ?? 0,
       virtualSize: sizeLabel(currentPatchLayout.virtualWidth, currentPatchLayout.virtualHeight),
       patchGrid: patchGridLabel(currentPatchLayout),
-      patchCount: renderTargets.length,
+      patchCount: patchDescriptors.length,
       patchSize: sizeLabel(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight),
       patchStorageSize: sizeLabel(currentPatchLayout.storageWidth, currentPatchLayout.storageHeight),
       internalPatchSize: sizeLabel(precisionWidthForLayout(currentPatchLayout), precisionHeightForLayout(currentPatchLayout)),
@@ -1105,7 +1265,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function dispose() {
     clearTimeout(bakeTimer);
-    disposePatchRenderTargets(renderTargets);
+    disposePatchDescriptors(patchDescriptors);
     disposeBakedDomeMeshes();
     supersampleTarget.dispose();
     starGeometry.dispose();
