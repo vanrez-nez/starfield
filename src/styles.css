@@ -214,6 +214,10 @@ select:focus-visible {
   font-weight: 700;
 }
 
+.row--readout .top {
+  margin-bottom: 0;
+}
+
 input[type="range"] {
   width: 100%;
   height: 16px;
@@ -282,6 +286,70 @@ select {
   font-weight: 700;
 }
 
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.switch-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.switch-track::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink);
+  content: "";
+  transition:
+    background 0.15s,
+    transform 0.15s;
+}
+
+.switch input:checked + .switch-track {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.switch input:checked + .switch-track::after {
+  background: var(--accent);
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.switch-text {
+  color: var(--ink);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
 .actions {
   display: flex;
   gap: 8px;
@@ -307,6 +375,36 @@ select {
   font-weight: 700;
 }
 
+#gpu-stats {
+  position: fixed;
+  bottom: 38px;
+  left: 16px;
+  z-index: 12;
+  min-width: 220px;
+  max-width: min(340px, calc(100vw - 32px));
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(7, 10, 16, 0.88);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+  white-space: pre-wrap;
+}
+
+#gpu-stats.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @media (max-width: 720px) {
   #panel {
     top: auto;
@@ -319,5 +417,12 @@ select {
 
   #hint {
     display: none;
+  }
+
+  #gpu-stats {
+    right: 12px;
+    bottom: auto;
+    left: 12px;
+    top: 12px;
   }
 }
