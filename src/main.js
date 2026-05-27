@@ -14,7 +14,7 @@ renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.setClearColor(0x05060a, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const FOV = 60;
+const HORIZONTAL_FOV = 60;
 const DOME_RADIUS = 10;
 const REFERENCE_BAKE_WIDTH = 4096;
 const REFERENCE_BAKE_HEIGHT = REFERENCE_BAKE_WIDTH / 2;
@@ -32,7 +32,14 @@ const HALF_FLOAT_ACCUMULATION_SUPPORTED = renderer.capabilities.isWebGL2
   : Boolean(renderer.extensions.get("EXT_color_buffer_half_float")) && FLOAT_BLEND_SUPPORTED;
 const STAR_ACCUMULATION_TYPE = HALF_FLOAT_ACCUMULATION_SUPPORTED ? THREE.HalfFloatType : THREE.UnsignedByteType;
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(FOV, window.innerWidth / window.innerHeight, 0.1, 30);
+
+function verticalFovForViewport(horizontalFov, aspect) {
+  const horizontalRadians = THREE.MathUtils.degToRad(horizontalFov);
+  return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(horizontalRadians * 0.5) / Math.max(aspect, 0.001)));
+}
+
+const initialAspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.PerspectiveCamera(verticalFovForViewport(HORIZONTAL_FOV, initialAspect), initialAspect, 0.1, 30);
 camera.position.set(0, 0, 0);
 camera.rotation.order = "YXZ";
 
@@ -124,8 +131,22 @@ const defaults = {
   uColorVar: 0.64,
   uSeed: 1,
   bakeWidth: defaultBakeWidth(),
+  sphereSegments: 128,
 };
 const defaultPatchLayout = createPatchLayout(defaults.bakeWidth);
+let currentSphereSegments = defaults.sphereSegments;
+
+function sphereVerticalSegmentsFor(horizontalSegments) {
+  return Math.max(8, Math.floor(horizontalSegments / 2));
+}
+
+function createDomeGeometry() {
+  return new THREE.SphereGeometry(
+    DOME_RADIUS,
+    currentSphereSegments,
+    sphereVerticalSegmentsFor(currentSphereSegments),
+  );
+}
 
 window.starfieldStats = {
   mode: "baked-equirect-skydome-tiled-catalog-splat",
@@ -136,6 +157,8 @@ window.starfieldStats = {
   textureWidth: defaults.bakeWidth,
   textureHeight: defaults.bakeWidth / 2,
   supersampleMode: "auto",
+  horizontalFov: HORIZONTAL_FOV,
+  verticalFov: camera.fov,
   supersample: autoSupersampleForLayout(defaultPatchLayout),
   maxSupersample: MAX_AUTO_SUPERSAMPLE,
   maxTextureSize: WEBGL_MAX_TEXTURE_SIZE,
@@ -152,6 +175,8 @@ window.starfieldStats = {
   referenceHeight: REFERENCE_BAKE_HEIGHT,
   internalWidth: precisionWidthForLayout(defaultPatchLayout),
   internalHeight: precisionHeightForLayout(defaultPatchLayout),
+  sphereSegments: currentSphereSegments,
+  sphereVerticalSegments: sphereVerticalSegmentsFor(currentSphereSegments),
   lastBakeMs: 0,
 };
 
@@ -522,10 +547,10 @@ const testDomeMaterial = new THREE.ShaderMaterial({
   depthWrite: false,
   depthTest: false,
   vertexShader: /* glsl */ `
-    varying vec2 vUv;
+    varying vec3 vDirection;
 
     void main() {
-      vUv = uv;
+      vDirection = position;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `,
@@ -533,10 +558,20 @@ const testDomeMaterial = new THREE.ShaderMaterial({
     precision highp float;
 
     uniform sampler2D uSkyTexture;
-    varying vec2 vUv;
+    varying vec3 vDirection;
+
+    const float PI = 3.14159265359;
+
+    vec2 directionToEquirectUv(vec3 direction) {
+      vec3 dir = normalize(direction);
+      float u = atan(dir.x, dir.z) / (2.0 * PI) + 0.5;
+      float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
+      return vec2(u, v);
+    }
 
     void main() {
-      gl_FragColor = texture2D(uSkyTexture, vUv);
+      vec2 skyUv = directionToEquirectUv(vDirection);
+      gl_FragColor = texture2D(uSkyTexture, vec2(skyUv.x, clamp(skyUv.y, 0.0, 1.0)));
     }
   `,
 });
@@ -565,10 +600,10 @@ function createPatchDomeMaterial(patch, layout) {
     depthWrite: false,
     depthTest: false,
     vertexShader: /* glsl */ `
-      varying vec2 vUv;
+      varying vec3 vDirection;
 
       void main() {
-        vUv = uv;
+        vDirection = position;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
@@ -580,10 +615,20 @@ function createPatchDomeMaterial(patch, layout) {
       uniform vec2 uContentUvSize;
       uniform vec2 uInnerOffset;
       uniform vec2 uInnerScale;
-      varying vec2 vUv;
+      varying vec3 vDirection;
+
+      const float PI = 3.14159265359;
+
+      vec2 directionToEquirectUv(vec3 direction) {
+        vec3 dir = normalize(direction);
+        float u = atan(dir.x, dir.z) / (2.0 * PI) + 0.5;
+        float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
+        return vec2(u, v);
+      }
 
       void main() {
-        vec2 localUv = (vUv - uContentUvMin) / uContentUvSize;
+        vec2 skyUv = directionToEquirectUv(vDirection);
+        vec2 localUv = (skyUv - uContentUvMin) / uContentUvSize;
         if (localUv.x < -0.000001 || localUv.x > 1.000001 || localUv.y < -0.000001 || localUv.y > 1.000001) {
           discard;
         }
@@ -594,7 +639,7 @@ function createPatchDomeMaterial(patch, layout) {
 }
 
 function createPatchDomeMesh(patch, layout) {
-  const geometry = new THREE.SphereGeometry(DOME_RADIUS, 128, 64);
+  const geometry = createDomeGeometry();
   const material = createPatchDomeMaterial(patch, layout);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
@@ -606,7 +651,7 @@ function createPatchDomeMesh(patch, layout) {
 const bakedDomeGroup = new THREE.Group();
 scene.add(bakedDomeGroup);
 
-const testDome = new THREE.Mesh(new THREE.SphereGeometry(DOME_RADIUS, 128, 64), testDomeMaterial);
+const testDome = new THREE.Mesh(createDomeGeometry(), testDomeMaterial);
 testDome.frustumCulled = false;
 testDome.visible = false;
 scene.add(testDome);
@@ -638,7 +683,6 @@ const state = {
   yaw: 0,
   pitch: 0,
   bakeTimer: 0,
-  gpuStatsTimer: 0,
   renderQueued: false,
   dragging: false,
   lastPointerX: 0,
@@ -651,8 +695,10 @@ gpuStatsPanel.setAttribute("aria-live", "polite");
 document.body.append(gpuStatsPanel);
 
 const PARAMS = [
+  { group: "Display" },
+  { key: "sphereSegments", label: "Sphere Segments", min: 16, max: 256, step: 16, format: (v) => v.toFixed(0), kind: "display" },
   { group: "Field" },
-  { key: "uDensity", label: "Density", min: 10, max: 180, step: 1, format: (v) => v.toFixed(0) },
+  { key: "uDensity", label: "Density", min: 10, max: 360, step: 1, format: (v) => v.toFixed(0) },
   { key: "uSparsity", label: "Sparsity", min: 0, max: 0.97, step: 0.005, format: (v) => v.toFixed(3) },
   { group: "Core" },
   { key: "uStarSize", label: "Star Size", min: 0.1, max: 4, step: 0.05, format: (v) => v.toFixed(2) },
@@ -712,6 +758,7 @@ function createAccumulationTarget(width, height) {
 
 function createPatchRenderTargets(layout) {
   const patches = [];
+  const horizontalWrap = layout.columns === 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
 
   for (let y = 0; y < layout.rows; y += 1) {
     for (let x = 0; x < layout.columns; x += 1) {
@@ -720,6 +767,7 @@ function createPatchRenderTargets(layout) {
         y,
         target: createRenderTarget(layout.storageWidth, layout.storageHeight, {
           name: `Baked skydome patch ${x + 1},${y + 1}`,
+          wrapS: horizontalWrap,
         }),
         mesh: null,
         material: null,
@@ -750,6 +798,20 @@ function rebuildBakedDomeMeshes(patches, layout) {
   patches.forEach((patch) => {
     bakedDomeGroup.add(createPatchDomeMesh(patch, layout));
   });
+}
+
+function updateSphereSegmentStats() {
+  window.starfieldStats.sphereSegments = currentSphereSegments;
+  window.starfieldStats.sphereVerticalSegments = sphereVerticalSegmentsFor(currentSphereSegments);
+}
+
+function rebuildDisplayGeometry() {
+  rebuildBakedDomeMeshes(renderTargets, currentPatchLayout);
+  const previousTestGeometry = testDome.geometry;
+  testDome.geometry = createDomeGeometry();
+  previousTestGeometry.dispose();
+  updateSphereSegmentStats();
+  scheduleRender();
 }
 
 function render() {
@@ -926,8 +988,19 @@ function addRangeRow(param) {
   input.step = String(param.step);
   input.value = String(defaults[param.key]);
 
-  function sync(delay = 180) {
+  function sync(delay = 180, initializing = false) {
     const nextValue = Number(input.value);
+    if (param.kind === "display") {
+      currentSphereSegments = nextValue;
+      value.textContent = param.format(nextValue);
+      updateSliderFill(input, param.min, param.max);
+      updateSphereSegmentStats();
+      if (!initializing) {
+        rebuildDisplayGeometry();
+      }
+      return;
+    }
+
     bakeUniforms[param.key].value = nextValue;
     if (CATALOG_PARAMS.has(param.key)) {
       markCatalogDirty();
@@ -941,7 +1014,7 @@ function addRangeRow(param) {
   top.append(label, value);
   row.append(top, input);
   rows.append(row);
-  sync(0);
+  sync(0, true);
 }
 
 function addTextureSizeRow() {
@@ -1109,6 +1182,8 @@ function collectGpuStats() {
     frame: info.render.frame,
     drawCalls: info.render.calls,
     callFrames: `${info.render.calls}/${info.render.frame}`,
+    horizontalFov: HORIZONTAL_FOV,
+    verticalFov: Number(camera.fov.toFixed(2)),
     polygons: info.render.triangles,
     triangles: info.render.triangles,
     points: info.render.points,
@@ -1116,6 +1191,8 @@ function collectGpuStats() {
     geometries: info.memory.geometries,
     textures: info.memory.textures,
     shaderPrograms: info.programs?.length ?? 0,
+    sphereSegments: currentSphereSegments,
+    sphereVerticalSegments: sphereVerticalSegmentsFor(currentSphereSegments),
     virtualSize: sizeLabel(currentPatchLayout.virtualWidth, currentPatchLayout.virtualHeight),
     patchGrid: patchGridLabel(currentPatchLayout),
     patchCount: renderTargets.length,
@@ -1134,10 +1211,12 @@ function formatGpuStatsForPanel(stats) {
     `GPU Stats`,
     `Memory: ${stats.estimatedTextureMemory}`,
     `Draws/Frame: ${stats.callFrames}`,
+    `FOV: ${stats.horizontalFov}h/${stats.verticalFov}v`,
     `Polygons: ${stats.polygons}`,
     `Geometry: ${stats.geometries}`,
     `Textures: ${stats.textures}`,
     `Programs: ${stats.shaderPrograms}`,
+    `Sphere: ${stats.sphereSegments}x${stats.sphereVerticalSegments}`,
     `Virtual: ${stats.virtualSize}`,
     `Patches: ${stats.patchGrid} (${stats.patchCount})`,
   ].join("\n");
@@ -1146,10 +1225,10 @@ function formatGpuStatsForPanel(stats) {
 function showGpuStatsPanel(stats) {
   gpuStatsPanel.textContent = formatGpuStatsForPanel(stats);
   gpuStatsPanel.classList.add("is-visible");
-  clearTimeout(state.gpuStatsTimer);
-  state.gpuStatsTimer = window.setTimeout(() => {
-    gpuStatsPanel.classList.remove("is-visible");
-  }, 5000);
+}
+
+function hideGpuStatsPanel() {
+  gpuStatsPanel.classList.remove("is-visible");
 }
 
 function printGpuStats() {
@@ -1162,10 +1241,19 @@ function printGpuStats() {
   console.groupEnd();
 }
 
+function toggleGpuStatsPanel() {
+  if (gpuStatsPanel.classList.contains("is-visible")) {
+    hideGpuStatsPanel();
+    return;
+  }
+
+  printGpuStats();
+}
+
 function handleGpuStatsHotkey(event) {
   if (event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
   event.preventDefault();
-  printGpuStats();
+  toggleGpuStatsPanel();
 }
 
 window.printStarfieldGpuStats = printGpuStats;
@@ -1213,6 +1301,8 @@ function resize() {
   const height = window.innerHeight;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
+  camera.fov = verticalFovForViewport(HORIZONTAL_FOV, camera.aspect);
+  window.starfieldStats.verticalFov = Number(camera.fov.toFixed(2));
   camera.updateProjectionMatrix();
   scheduleRender();
 }

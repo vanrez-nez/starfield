@@ -26,7 +26,9 @@ Open `http://127.0.0.1:5173/`.
 - Tiled patches include a 64-texel guard band to keep filtering continuous across patch boundaries.
 - Supersampling is automatic per patch: `min(8, floor(MAX_TEXTURE_SIZE / patchStorageWidth), floor(MAX_TEXTURE_SIZE / patchStorageHeight))`.
 - The panel shows the selected virtual size, patch grid, content patch size, automatic supersample factor, internal patch size, and WebGL texture limit used for the cap.
+- The `Sphere Segments` display control rebuilds only the skydome geometry. It does not rebake generated textures; vertical segments are derived as half of the horizontal setting.
 - Lower final textures are useful for storage/performance previews, but they still have fewer texels to sample in the skydome. A `1024x512` equirectangular texture cannot preserve crisp sub-texel stars when magnified through a 60 degree camera.
 - The app renders on demand for resize, camera drag, and bake completion instead of running a continuous animation loop.
+- The display camera keeps a fixed horizontal FOV and derives Three.js' vertical FOV from the current viewport aspect.
 - Shader controls expose base and variance per feature: density/sparsity, core size/size variance, brightness/brightness variance, glare size/strength/variance, and color variance.
-- Press `Tab` to print basic GPU/render stats to the browser console and show a temporary in-app stats panel.
+- Press `Tab` to print basic GPU/render stats, including skydome segment counts, to the browser console and show a temporary in-app stats panel.
