@@ -13,11 +13,10 @@ Open `http://127.0.0.1:5173/`.
 
 ## Skydome Shape
 
-- `src/main.js` builds a deterministic star catalog from the current seed, density, and sparsity controls.
+- `src/starfield.js` builds a deterministic star catalog from the current seed, density, and sparsity controls. `src/main.js` only wires the Three.js app shell, and `src/controls.js` owns the panel UI.
 - The generated bake renders that catalog as seam-duplicated instanced equirectangular quads into a temporary supersampled patch target, then box-filters down into guarded output patches.
 - Each star fragment maps its equirectangular UV to a spherical direction and measures angular distance to the star direction, so core and glare falloffs are circular on the skydome instead of bounded by texture cells.
 - The visible scene uses clipped full-sphere patch passes, so each generated patch samples through the same skydome UV mapping while avoiding physical segment seams.
-- The Bake panel includes a texture-source switch that swaps the skydome sampler between the generated render target and `starfield-test.png` for comparison.
 - There is no cubemap render target, mipmapping, or cube-face sampling.
 - Each patch render target is a normal 2D texture, so the tiled set can be composed with other baked sky effects later.
 - Star and glare sizes are measured in angular units against a fixed `4096x2048` reference, with minimum final-texel footprints to keep low-resolution bakes round when magnified.
