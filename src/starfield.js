@@ -10,6 +10,20 @@ const MIN_CORE_FINAL_TEXELS = 1.75;
 const MIN_GLARE_FINAL_TEXELS = 3.25;
 const GAUSSIAN_CUTOFF_SIGMA = 6.0;
 const CATALOG_PARAMS = new Set(["uDensity", "uSparsity"]);
+const TEXELS_PER_PIXEL_TARGET = 1.5;
+const DENSITY_FALLBACK_STARS_PER_PIXEL = 0.25;
+const BRIGHT_STAR_FRACTION = 0.1;
+const PATCH_SIZE_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384];
+const FINAL_TEXTURE_BYTES_PER_PIXEL = 4;
+const BYTES_PER_MIB = 1024 * 1024;
+const DEFAULT_ADAPTIVE_QUALITY = Object.freeze({
+  adaptiveResolution: false,
+  targetTexelsPerPixel: TEXELS_PER_PIXEL_TARGET,
+  minPatchSize: 256,
+  maxPatchSize: 4096,
+  patchBudgetMb: 128,
+  centerBias: 0.5,
+});
 
 function sphereVerticalSegmentsFor(horizontalSegments) {
   return Math.max(8, Math.floor(horizontalSegments / 2));
@@ -27,6 +41,23 @@ function formatBytes(bytes) {
 
 function estimateTextureBytes(width, height, bytesPerPixel) {
   return width * height * bytesPerPixel;
+}
+
+function clamp(value, min, max) {
+  const numeric = Number.isFinite(value) ? value : min;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function bucketForDemand(texels, minSize, maxSize, maxTextureSize) {
+  const boundedMin = Math.min(maxTextureSize, Math.max(1, minSize));
+  const boundedMax = Math.max(boundedMin, Math.min(maxTextureSize, maxSize, PATCH_SIZE_BUCKETS[PATCH_SIZE_BUCKETS.length - 1]));
+  const boundedTexels = clamp(texels, boundedMin, boundedMax);
+
+  for (const bucket of PATCH_SIZE_BUCKETS) {
+    if (bucket >= boundedTexels) return Math.min(bucket, boundedMax);
+  }
+
+  return boundedMax;
 }
 
 function mulberry32(seed) {
@@ -141,9 +172,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uSeed: 1,
     bakeWidth: defaultBakeWidth(),
     sphereSegments: 128,
+    ...DEFAULT_ADAPTIVE_QUALITY,
   };
   const defaultPatchLayout = createPatchLayout(defaults.bakeWidth);
   let currentSphereSegments = defaults.sphereSegments;
+  const adaptiveQuality = { ...DEFAULT_ADAPTIVE_QUALITY };
 
   const stats = {
     mode: "baked-equirect-skydome-tiled-catalog-splat",
@@ -684,6 +717,15 @@ export function createStarfield({ renderer, scene, requestRender }) {
   let renderTargets = createPatchRenderTargets(currentPatchLayout);
   let supersampleTarget = createAccumulationTarget(precisionWidthForLayout(currentPatchLayout), precisionHeightForLayout(currentPatchLayout));
   let bakeTimer = 0;
+  let currentCameraInfo = {
+    horizontalFov: 0,
+    verticalFov: 0,
+    screenWidth: 1,
+    screenHeight: 1,
+    cssWidth: 1,
+    cssHeight: 1,
+    pixelRatio: 1,
+  };
   rebuildBakedDomeMeshes(renderTargets, currentPatchLayout);
 
   function setBakeStatus(label, disabled = false) {
@@ -692,6 +734,152 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function notifyReadouts() {
     readoutsChangeHandler(getReadouts());
+  }
+
+  function computeDemandReadouts() {
+    const targetTexelsPerPixel = adaptiveQuality.targetTexelsPerPixel;
+    const minPatchSize = Math.min(WEBGL_MAX_TEXTURE_SIZE, Math.max(1, adaptiveQuality.minPatchSize));
+    const maxPatchSize = Math.max(minPatchSize, Math.min(WEBGL_MAX_TEXTURE_SIZE, adaptiveQuality.maxPatchSize));
+    const horizontalFov = Number(currentCameraInfo.horizontalFov) || 0;
+    const verticalFov = Number(currentCameraInfo.verticalFov) || 0;
+    const horizontalFovRad = THREE.MathUtils.degToRad(Math.max(horizontalFov, 0.001));
+    const verticalFovRad = THREE.MathUtils.degToRad(Math.max(verticalFov, 0.001));
+    const screenWidth = Math.max(1, Number(currentCameraInfo.screenWidth) || 1);
+    const screenHeight = Math.max(1, Number(currentCameraInfo.screenHeight) || 1);
+    const cssWidth = Math.max(1, Number(currentCameraInfo.cssWidth) || screenWidth);
+    const cssHeight = Math.max(1, Number(currentCameraInfo.cssHeight) || screenHeight);
+    const pixelRatio = Math.max(1, Number(currentCameraInfo.pixelRatio) || 1);
+    const pixelsPerRadianX = screenWidth / horizontalFovRad;
+    const pixelsPerRadianY = screenHeight / verticalFovRad;
+    const pixelsPerDegreeX = pixelsPerRadianX * (Math.PI / 180);
+    const pixelsPerDegreeY = pixelsPerRadianY * (Math.PI / 180);
+    const patchCount = Math.max(1, currentPatchLayout.columns * currentPatchLayout.rows);
+    const patchAngularWidthRad = (Math.PI * 2) / currentPatchLayout.columns;
+    const patchAngularHeightRad = Math.PI / currentPatchLayout.rows;
+    const patchAngularWidthDeg = THREE.MathUtils.radToDeg(patchAngularWidthRad);
+    const patchAngularHeightDeg = THREE.MathUtils.radToDeg(patchAngularHeightRad);
+    const projectedPatchWidthPixels = patchAngularWidthRad * pixelsPerRadianX;
+    const projectedPatchHeightPixels = patchAngularHeightRad * pixelsPerRadianY;
+    const projectedPatchPixels = Math.max(1, projectedPatchWidthPixels * projectedPatchHeightPixels);
+    const requiredPatchTexelsX = projectedPatchWidthPixels * targetTexelsPerPixel;
+    const requiredPatchTexelsY = projectedPatchHeightPixels * targetTexelsPerPixel;
+    const requiredPatchTexelsMax = Math.max(requiredPatchTexelsX, requiredPatchTexelsY, 1);
+    const recommendedActualPatchWidth = bucketForDemand(requiredPatchTexelsX, minPatchSize, maxPatchSize, WEBGL_MAX_TEXTURE_SIZE);
+    const recommendedActualPatchHeight = bucketForDemand(requiredPatchTexelsY, minPatchSize, maxPatchSize, WEBGL_MAX_TEXTURE_SIZE);
+    const recommendedPatchBucket = Math.max(recommendedActualPatchWidth, recommendedActualPatchHeight);
+    const currentPatchSize = Math.max(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight);
+    const oversampleRatio = currentPatchSize / requiredPatchTexelsMax;
+    const totalStarCount = catalogStarCount();
+    const estimatedStarsPerPatch = totalStarCount / patchCount;
+    const starsPerProjectedPixel = estimatedStarsPerPatch / projectedPatchPixels;
+    const densityScale = starsPerProjectedPixel > 0
+      ? Math.min(1, DENSITY_FALLBACK_STARS_PER_PIXEL / starsPerProjectedPixel)
+      : 1;
+    const densityFallbackWarning = densityScale < 1;
+
+    return {
+      horizontalFov,
+      verticalFov,
+      horizontalFovRad,
+      verticalFovRad,
+      screenWidth,
+      screenHeight,
+      cssWidth,
+      cssHeight,
+      pixelRatio,
+      screenSize: sizeLabel(screenWidth, screenHeight),
+      cssSize: sizeLabel(cssWidth, cssHeight),
+      adaptiveResolution: adaptiveQuality.adaptiveResolution,
+      targetTexelsPerPixel,
+      texelsPerPixelTarget: targetTexelsPerPixel,
+      minPatchSize,
+      maxPatchSize,
+      patchBudgetMb: adaptiveQuality.patchBudgetMb,
+      centerBias: adaptiveQuality.centerBias,
+      pixelsPerRadianX,
+      pixelsPerRadianY,
+      pixelsPerDegreeX,
+      pixelsPerDegreeY,
+      patchAngularWidthRad,
+      patchAngularHeightRad,
+      patchAngularWidthDeg,
+      patchAngularHeightDeg,
+      projectedPatchWidthPixels,
+      projectedPatchHeightPixels,
+      projectedPatchPixels,
+      requiredPatchTexelsX,
+      requiredPatchTexelsY,
+      requiredPatchTexels: sizeLabel(requiredPatchTexelsX, requiredPatchTexelsY),
+      recommendedPatchBucket,
+      recommendedActualPatchWidth,
+      recommendedActualPatchHeight,
+      recommendedActualRasterSize: sizeLabel(recommendedActualPatchWidth, recommendedActualPatchHeight),
+      currentPatchSize,
+      oversampleRatio,
+      undersampleWarning: oversampleRatio < 1,
+      totalStarCount,
+      estimatedStarsPerPatch,
+      starsPerProjectedPixel,
+      brightStarCount: estimatedStarsPerPatch * BRIGHT_STAR_FRACTION,
+      densityScale,
+      densityFallbackWarning,
+      densityFallbackPatchCount: densityFallbackWarning ? patchCount : 0,
+      densityFallbackThreshold: DENSITY_FALLBACK_STARS_PER_PIXEL,
+    };
+  }
+
+  function computeMemoryReadouts(demand = computeDemandReadouts()) {
+    const patchCount = Math.max(1, currentPatchLayout.columns * currentPatchLayout.rows);
+    const residentTextureBytes = estimateTextureBytes(
+      currentPatchLayout.storageWidth,
+      currentPatchLayout.storageHeight,
+      FINAL_TEXTURE_BYTES_PER_PIXEL,
+    ) * patchCount;
+    const accumulationBytesPerPixel = STAR_ACCUMULATION_TYPE === THREE.HalfFloatType ? 8 : 4;
+    const bakeScratchBytes = estimateTextureBytes(
+      precisionWidthForLayout(currentPatchLayout),
+      precisionHeightForLayout(currentPatchLayout),
+      accumulationBytesPerPixel,
+    );
+    const pooledTargetBytes = 0;
+    const totalAllocatedBytes = residentTextureBytes + bakeScratchBytes + pooledTargetBytes;
+    const recommendedStorageWidth = Math.min(WEBGL_MAX_TEXTURE_SIZE, demand.recommendedActualPatchWidth + currentPatchLayout.guard * 2);
+    const recommendedStorageHeight = Math.min(WEBGL_MAX_TEXTURE_SIZE, demand.recommendedActualPatchHeight + currentPatchLayout.guard * 2);
+    const recommendedResidentTextureBytes = estimateTextureBytes(
+      recommendedStorageWidth,
+      recommendedStorageHeight,
+      FINAL_TEXTURE_BYTES_PER_PIXEL,
+    ) * patchCount;
+    const patchBudgetBytes = Math.max(BYTES_PER_MIB, adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
+
+    return {
+      residentTextureBytes,
+      residentTextureMemory: formatBytes(residentTextureBytes),
+      bakeScratchBytes,
+      bakeScratchMemory: formatBytes(bakeScratchBytes),
+      pooledTargetBytes,
+      pooledTargetMemory: formatBytes(pooledTargetBytes),
+      totalAllocatedBytes,
+      totalAllocatedMemory: formatBytes(totalAllocatedBytes),
+      patchBudgetBytes,
+      patchBudgetMemory: formatBytes(patchBudgetBytes),
+      residentBudgetRatio: residentTextureBytes / patchBudgetBytes,
+      totalAllocatedBudgetRatio: totalAllocatedBytes / patchBudgetBytes,
+      residentBudgetExceeded: residentTextureBytes > patchBudgetBytes,
+      totalAllocatedBudgetExceeded: totalAllocatedBytes > patchBudgetBytes,
+      recommendedStorageWidth,
+      recommendedStorageHeight,
+      recommendedPatchStorageSize: sizeLabel(recommendedStorageWidth, recommendedStorageHeight),
+      recommendedResidentTextureBytes,
+      recommendedResidentTextureMemory: formatBytes(recommendedResidentTextureBytes),
+      recommendedResidentBudgetRatio: recommendedResidentTextureBytes / patchBudgetBytes,
+      recommendedResidentBudgetExceeded: recommendedResidentTextureBytes > patchBudgetBytes,
+    };
+  }
+
+  function updateDemandStats() {
+    const demand = computeDemandReadouts();
+    Object.assign(stats, demand, computeMemoryReadouts(demand));
   }
 
   function updatePatchStats() {
@@ -708,6 +896,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     stats.patchGuard = currentPatchLayout.guard;
     stats.internalWidth = precisionWidthForLayout(currentPatchLayout);
     stats.internalHeight = precisionHeightForLayout(currentPatchLayout);
+    updateDemandStats();
   }
 
   function updateSphereSegmentStats() {
@@ -809,7 +998,30 @@ export function createStarfield({ renderer, scene, requestRender }) {
     if (CATALOG_PARAMS.has(key)) {
       markCatalogDirty();
     }
+    updateDemandStats();
+    notifyReadouts();
     scheduleBake(delay);
+  }
+
+  function setAdaptiveParam(key, value) {
+    if (!(key in adaptiveQuality)) return;
+
+    if (key === "adaptiveResolution") {
+      adaptiveQuality[key] = Boolean(value);
+    } else if (key === "targetTexelsPerPixel") {
+      adaptiveQuality[key] = clamp(Number(value), 0.25, 4);
+    } else if (key === "minPatchSize") {
+      adaptiveQuality[key] = clamp(Number(value), 128, WEBGL_MAX_TEXTURE_SIZE);
+    } else if (key === "maxPatchSize") {
+      adaptiveQuality[key] = clamp(Number(value), 128, WEBGL_MAX_TEXTURE_SIZE);
+    } else if (key === "patchBudgetMb") {
+      adaptiveQuality[key] = clamp(Number(value), 16, 4096);
+    } else if (key === "centerBias") {
+      adaptiveQuality[key] = clamp(Number(value), 0, 1);
+    }
+
+    updateDemandStats();
+    notifyReadouts();
   }
 
   function setSphereSegments(value) {
@@ -824,6 +1036,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function getReadouts() {
+    const demand = computeDemandReadouts();
+    const memory = computeMemoryReadouts(demand);
     return {
       bakeWidth: currentBakeWidth,
       supportedBakeWidths: supportedBakeWidths(),
@@ -832,12 +1046,21 @@ export function createStarfield({ renderer, scene, requestRender }) {
       supersample: `${currentSupersample}x`,
       internalPatchSize: sizeLabel(precisionWidthForLayout(currentPatchLayout), precisionHeightForLayout(currentPatchLayout)),
       gpuLimit: `${WEBGL_MAX_TEXTURE_SIZE}`,
+      adaptive: { ...adaptiveQuality },
+      demand,
+      memory,
     };
   }
 
   function setCameraInfo(cameraInfo) {
-    stats.horizontalFov = cameraInfo.horizontalFov;
-    stats.verticalFov = cameraInfo.verticalFov;
+    currentCameraInfo = {
+      ...currentCameraInfo,
+      ...cameraInfo,
+    };
+    stats.horizontalFov = currentCameraInfo.horizontalFov;
+    stats.verticalFov = currentCameraInfo.verticalFov;
+    updateDemandStats();
+    notifyReadouts();
   }
 
   function recordRender() {
@@ -849,20 +1072,12 @@ export function createStarfield({ renderer, scene, requestRender }) {
       setCameraInfo(cameraInfo);
     }
 
-    const patchTextureBytes = estimateTextureBytes(
-      currentPatchLayout.storageWidth,
-      currentPatchLayout.storageHeight,
-      4,
-    ) * renderTargets.length;
-    const accumulationBytesPerPixel = STAR_ACCUMULATION_TYPE === THREE.HalfFloatType ? 8 : 4;
-    const accumulationTextureBytes = estimateTextureBytes(
-      precisionWidthForLayout(currentPatchLayout),
-      precisionHeightForLayout(currentPatchLayout),
-      accumulationBytesPerPixel,
-    );
-    const estimatedTextureBytes = patchTextureBytes + accumulationTextureBytes;
+    const demand = computeDemandReadouts();
+    const memory = computeMemoryReadouts(demand);
     const result = {
       ...stats,
+      ...demand,
+      ...memory,
       frame: rendererInfo.render.frame,
       drawCalls: rendererInfo.render.calls,
       callFrames: `${rendererInfo.render.calls}/${rendererInfo.render.frame}`,
@@ -881,8 +1096,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
       internalPatchSize: sizeLabel(precisionWidthForLayout(currentPatchLayout), precisionHeightForLayout(currentPatchLayout)),
       supersample: `${currentSupersample}x`,
       accumulationType: HALF_FLOAT_ACCUMULATION_SUPPORTED ? "HalfFloatType" : "UnsignedByteType",
-      estimatedTextureMemory: formatBytes(estimatedTextureBytes),
-      estimatedTextureBytes,
+      estimatedTextureMemory: memory.totalAllocatedMemory,
+      estimatedTextureBytes: memory.totalAllocatedBytes,
     };
     Object.assign(stats, result);
     return result;
@@ -913,6 +1128,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     getSupportedBakeWidths: supportedBakeWidths,
     getReadouts,
     setParam,
+    setAdaptiveParam,
     setSphereSegments,
     setBakeWidth,
     reseed,

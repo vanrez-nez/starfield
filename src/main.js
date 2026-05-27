@@ -18,6 +18,7 @@ renderer.setClearColor(0x05060a, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
+const drawingBufferSize = new THREE.Vector2();
 
 function verticalFovForViewport(horizontalFov, aspect) {
   const horizontalRadians = THREE.MathUtils.degToRad(horizontalFov);
@@ -25,9 +26,15 @@ function verticalFovForViewport(horizontalFov, aspect) {
 }
 
 function cameraInfo() {
+  renderer.getDrawingBufferSize(drawingBufferSize);
   return {
     horizontalFov: HORIZONTAL_FOV,
     verticalFov: Number(camera.fov.toFixed(2)),
+    screenWidth: drawingBufferSize.x,
+    screenHeight: drawingBufferSize.y,
+    cssWidth: window.innerWidth,
+    cssHeight: window.innerHeight,
+    pixelRatio: renderer.getPixelRatio(),
   };
 }
 
