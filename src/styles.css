@@ -146,8 +146,18 @@ h1 span {
   padding: 8px 6px;
 }
 
+.btn--wide {
+  flex-basis: 100%;
+}
+
 .icon-button:hover,
 .btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #eafaff;
+}
+
+.btn[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: #eafaff;
@@ -349,6 +359,7 @@ select {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 11px 14px 13px;
   border-top: 1px solid var(--hair);

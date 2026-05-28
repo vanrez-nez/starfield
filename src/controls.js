@@ -7,6 +7,7 @@ const PARAMS = [
   { group: "Core" },
   { key: "uStarSize", label: "Star Size", min: 0.1, max: 4, step: 0.05, format: (v) => v.toFixed(2) },
   { key: "uSizeVar", label: "Size Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
+  { key: "uLargeStarRarity", label: "Large Star Rarity", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
   { key: "uBright", label: "Brightness", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2) },
   { key: "uBrightVar", label: "Brightness Var", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
   { group: "Glare" },
@@ -252,6 +253,18 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   function setBakeStatus(label, disabled = false) {
     buttons.bake.textContent = label;
     buttons.bake.disabled = disabled;
+  }
+
+  function setOverlayButtonState(enabled) {
+    if (!buttons.overlay) return;
+    buttons.overlay.setAttribute("aria-pressed", enabled ? "true" : "false");
+  }
+
+  function toggleOverlay() {
+    const nextEnabled = !starfield.getBrightStarOverlayEnabled();
+    starfield.setBrightStarOverlayEnabled(nextEnabled);
+    setOverlayButtonState(starfield.getBrightStarOverlayEnabled());
+    refreshVisibleStatsPanel({ force: true });
   }
 
   function refreshReadouts() {
@@ -506,16 +519,19 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   buttons.bake.addEventListener("click", () => starfield.bakeNow());
   buttons.seed.addEventListener("click", () => starfield.reseed());
   buttons.recenter.addEventListener("click", onRecenter);
+  buttons.overlay?.addEventListener("click", toggleOverlay);
   document.addEventListener("keydown", handleUxHotkey, true);
   window.printStarfieldGpuStats = printGpuStats;
 
   buildPanel();
+  setOverlayButtonState(starfield.getBrightStarOverlayEnabled());
 
   return {
     refreshReadouts,
     printGpuStats,
     dispose() {
       clearTimeout(statsRefreshTimer);
+      buttons.overlay?.removeEventListener("click", toggleOverlay);
       document.removeEventListener("keydown", handleUxHotkey, true);
       document.body.classList.remove("is-ux-hidden");
       gpuStatsPanel.remove();

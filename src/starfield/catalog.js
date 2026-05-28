@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   BRIGHT_STAR_FRACTION,
+  BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
   STAR_CLASSES,
   STAR_QUERY_EDGE_PAD_CELLS,
   STAR_QUERY_SEAM_COPIES,
@@ -31,6 +32,11 @@ export const EMPTY_STAR_POSITIONS = new Float32Array([
 export function createEmptyStarGeometry() {
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(EMPTY_STAR_POSITIONS, 3));
+  geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(0), 3));
+  geometry.setAttribute("iUv", new THREE.InstancedBufferAttribute(new Float32Array(0), 2));
+  geometry.setAttribute("iRandoms", new THREE.InstancedBufferAttribute(new Float32Array(0), 4));
+  geometry.setAttribute("iSizeGate", new THREE.InstancedBufferAttribute(new Float32Array(0), 1));
+  geometry.setAttribute("iClass", new THREE.InstancedBufferAttribute(new Float32Array(0), 1));
   geometry.instanceCount = 0;
   return geometry;
 }
@@ -40,6 +46,7 @@ export function createEmptyOverlayGeometry() {
   geometry.setAttribute("position", new THREE.BufferAttribute(EMPTY_STAR_POSITIONS, 3));
   geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(0), 3));
   geometry.setAttribute("iRandoms", new THREE.InstancedBufferAttribute(new Float32Array(0), 4));
+  geometry.setAttribute("iSizeGate", new THREE.InstancedBufferAttribute(new Float32Array(0), 1));
   geometry.setAttribute("iClass", new THREE.InstancedBufferAttribute(new Float32Array(0), 1));
   geometry.instanceCount = 0;
   return geometry;
@@ -60,6 +67,10 @@ export function catalogStarCount(bakeUniforms) {
   return Math.round(grid.columns * grid.rows * grid.occupancy);
 }
 
+function largeStarRarityFromUniforms(bakeUniforms) {
+  return clamp(bakeUniforms.uLargeStarRarity?.value ?? 0, 0, 1);
+}
+
 export function overlayCandidateStarCount({ bakeUniforms, catalogDirty, stats }) {
   const totalStarCount = catalogStarCount(bakeUniforms);
   return !catalogDirty && stats.starClassTotal > 0
@@ -67,7 +78,7 @@ export function overlayCandidateStarCount({ bakeUniforms, catalogDirty, stats })
     : totalStarCount * BRIGHT_STAR_FRACTION;
 }
 
-export function starFromCell(grid, column, row) {
+export function starFromCell(grid, column, row, largeStarRarity = 0) {
   if (row < 0 || row >= grid.rows) return null;
 
   const wrappedColumn = wrapIndex(column, grid.columns);
@@ -82,6 +93,7 @@ export function starFromCell(grid, column, row) {
   const rBright = hashCellUnit(grid.seed, wrappedColumn, row, 4);
   const rGlare = hashCellUnit(grid.seed, wrappedColumn, row, 5);
   const rColor = hashCellUnit(grid.seed, wrappedColumn, row, 6);
+  const rSizeGate = hashCellUnit(grid.seed, wrappedColumn, row, 7);
 
   return {
     cellId: `${wrappedColumn}:${row}`,
@@ -96,24 +108,27 @@ export function starFromCell(grid, column, row) {
     rBright,
     rGlare,
     rColor,
-    classId: classifyStar(rSize, rBright, rGlare),
+    rSizeGate,
+    classId: classifyStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare),
   };
 }
 
-function appendStarInstances({ directions, uvs, randoms, classes }, star) {
+function appendStarInstances({ directions, uvs, randoms, sizeGates, classes }, star) {
   for (let seam = -1; seam <= 1; seam += 1) {
     directions.push(star.x, star.y, star.z);
     uvs.push(star.u + seam, star.v);
     randoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
+    sizeGates.push(star.rSizeGate);
     classes.push(star.classId);
   }
 }
 
-function createGeometryFromInstanceArrays({ directions, uvs, randoms, classes }) {
+function createGeometryFromInstanceArrays({ directions, uvs, randoms, sizeGates, classes }) {
   const geometry = createEmptyStarGeometry();
   geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(directions), 3));
   geometry.setAttribute("iUv", new THREE.InstancedBufferAttribute(new Float32Array(uvs), 2));
   geometry.setAttribute("iRandoms", new THREE.InstancedBufferAttribute(new Float32Array(randoms), 4));
+  geometry.setAttribute("iSizeGate", new THREE.InstancedBufferAttribute(new Float32Array(sizeGates), 1));
   geometry.setAttribute("iClass", new THREE.InstancedBufferAttribute(new Float32Array(classes), 1));
   geometry.instanceCount = classes.length;
   return geometry;
@@ -151,6 +166,7 @@ export function createStarGeometryForDescriptor({
   stats,
 }) {
   const grid = currentStarGrid(bakeUniforms);
+  const largeStarRarity = largeStarRarityFromUniforms(bakeUniforms);
   const supportAngle = maxStarSupportAngle({ bakeUniforms, currentCameraInfo });
   const vMargin = supportAngle / Math.PI;
   const rawVMin = descriptor.storageUvMin.y - vMargin;
@@ -178,6 +194,7 @@ export function createStarGeometryForDescriptor({
     directions: [],
     uvs: [],
     randoms: [],
+    sizeGates: [],
     classes: [],
   };
   let queriedCellCount = 0;
@@ -188,9 +205,9 @@ export function createStarGeometryForDescriptor({
       if (!poleWideQuery && !uvRangeIntersectsColumn(uMin, uMax, column, grid.columns)) continue;
 
       queriedCellCount += 1;
-      const star = starFromCell(grid, column, row);
+      const star = starFromCell(grid, column, row, largeStarRarity);
       if (!star) continue;
-      if (brightStarOverlayEnabled && star.classId > STAR_CLASSES.NORMAL) continue;
+      if (brightStarOverlayEnabled && BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS && star.classId > STAR_CLASSES.NORMAL) continue;
 
       appendStarInstances(arrays, star);
       queriedStarCount += 1;
@@ -211,14 +228,16 @@ export function createStarGeometryForDescriptor({
 
 export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEnabled }) {
   const grid = currentStarGrid(bakeUniforms);
+  const largeStarRarity = largeStarRarityFromUniforms(bakeUniforms);
   const overlayDirections = [];
   const overlayRandoms = [];
+  const overlaySizeGates = [];
   const overlayClasses = [];
   const classStats = emptyStarClassStats();
 
   for (let row = 0; row < grid.rows; row += 1) {
     for (let column = 0; column < grid.columns; column += 1) {
-      const star = starFromCell(grid, column, row);
+      const star = starFromCell(grid, column, row, largeStarRarity);
       if (!star) continue;
 
       recordStarClass(classStats, star.classId);
@@ -226,6 +245,7 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
       if (brightStarOverlayEnabled && (star.classId === STAR_CLASSES.BRIGHT || star.classId === STAR_CLASSES.HERO)) {
         overlayDirections.push(star.x, star.y, star.z);
         overlayRandoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
+        overlaySizeGates.push(star.rSizeGate);
         overlayClasses.push(star.classId);
       }
     }
@@ -234,10 +254,11 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
   const nextOverlayGeometry = createEmptyOverlayGeometry();
   nextOverlayGeometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(overlayDirections), 3));
   nextOverlayGeometry.setAttribute("iRandoms", new THREE.InstancedBufferAttribute(new Float32Array(overlayRandoms), 4));
+  nextOverlayGeometry.setAttribute("iSizeGate", new THREE.InstancedBufferAttribute(new Float32Array(overlaySizeGates), 1));
   nextOverlayGeometry.setAttribute("iClass", new THREE.InstancedBufferAttribute(new Float32Array(overlayClasses), 1));
   nextOverlayGeometry.instanceCount = overlayClasses.length;
   const finalizedClassStats = finalizeStarClassStats(classStats);
-  if (brightStarOverlayEnabled) {
+  if (brightStarOverlayEnabled && BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS) {
     finalizedClassStats.bakedCandidateStarCount = finalizedClassStats.normalStarCount;
   }
   finalizedClassStats.overlayStarCount = overlayClasses.length;

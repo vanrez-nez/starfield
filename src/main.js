@@ -140,11 +140,12 @@ function recenter() {
 
 const uiControls = createControls({
   rows: document.querySelector("#rows"),
-  buttons: {
-    bake: document.querySelector("#rebake"),
-    seed: document.querySelector("#seedBtn"),
-    recenter: document.querySelector("#recenterBtn"),
-  },
+	  buttons: {
+	    bake: document.querySelector("#rebake"),
+	    seed: document.querySelector("#seedBtn"),
+	    recenter: document.querySelector("#recenterBtn"),
+	    overlay: document.querySelector("#toggleOverlayBtn"),
+	  },
   starfield,
   getStats(options = {}) {
     applyResizeIfNeeded();

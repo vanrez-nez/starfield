@@ -15,7 +15,14 @@ export const MIN_GLARE_PIXELS = 3.25;
 export const SUBPIXEL_DENSITY_THRESHOLD_PX = 0.5;
 export const AA_PIN_THRESHOLD_PX = 1.5;
 export const GAUSSIAN_CUTOFF_SIGMA = 6.0;
-export const BRIGHT_STAR_OVERLAY_ENABLED = false;
+export const STAR_SIZE_MIN_SCALE = 0.1;
+export const STAR_SIZE_RARITY_EXPONENT = 5.0;
+export const STAR_SIZE_GATE_EXPONENT = 12.0;
+export const STAR_SIZE_BRIGHTNESS_LINK = 0.35;
+export const STAR_SIZE_GLARE_LINK = 0.25;
+export const DEFAULT_LARGE_STAR_RARITY = 0.5;
+export const BRIGHT_STAR_OVERLAY_ENABLED = true;
+export const BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS = false;
 export const BRIGHT_STAR_OVERLAY_STRENGTH = 0.38;
 export const BRIGHT_STAR_OVERLAY_RADIUS_SCALE = 0.985;
 export const MAX_BAKE_JOBS_PER_FRAME = 1;
@@ -266,18 +273,28 @@ export function emptyStarClassStats() {
   };
 }
 
-export function visualImportanceForStar(rSize, rBright, rGlare) {
-  const sizeScore = rSize;
-  const brightScore = Math.pow(rBright, 3);
-  const glareScore = Math.pow(rGlare, 8);
+export function starSizeRank(rSize, rSizeGate = 1, largeStarRarity = 0) {
+  const baseRank = Math.pow(clamp(rSize, 0, 1), STAR_SIZE_RARITY_EXPONENT);
+  const gate = 1 + (Math.pow(clamp(rSizeGate, 0, 1), STAR_SIZE_GATE_EXPONENT) - 1) * clamp(largeStarRarity, 0, 1);
+  return baseRank * gate;
+}
+
+export function visualImportanceForStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare) {
+  const sizeScore = starSizeRank(rSize, rSizeGate, largeStarRarity);
+  const linkedBrightRand = rBright + (Math.max(rBright, sizeScore) - rBright) * STAR_SIZE_BRIGHTNESS_LINK;
+  const linkedGlareRand = rGlare + (Math.max(rGlare, sizeScore) - rGlare) * STAR_SIZE_GLARE_LINK;
+  const brightScore = Math.pow(linkedBrightRand, 3);
+  const glareScore = Math.pow(linkedGlareRand, 8);
   return clamp(sizeScore * 0.3 + brightScore * 0.55 + glareScore * 0.15, 0, 1);
 }
 
-export function classifyStar(rSize, rBright, rGlare) {
-  const sizeScore = rSize;
-  const brightScore = Math.pow(rBright, 3);
-  const glareScore = Math.pow(rGlare, 8);
-  const importance = visualImportanceForStar(rSize, rBright, rGlare);
+export function classifyStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare) {
+  const sizeScore = starSizeRank(rSize, rSizeGate, largeStarRarity);
+  const linkedBrightRand = rBright + (Math.max(rBright, sizeScore) - rBright) * STAR_SIZE_BRIGHTNESS_LINK;
+  const linkedGlareRand = rGlare + (Math.max(rGlare, sizeScore) - rGlare) * STAR_SIZE_GLARE_LINK;
+  const brightScore = Math.pow(linkedBrightRand, 3);
+  const glareScore = Math.pow(linkedGlareRand, 8);
+  const importance = visualImportanceForStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare);
 
   if (importance >= 0.78 || (brightScore > 0.85 && (sizeScore > 0.65 || glareScore > 0.35))) {
     return STAR_CLASSES.HERO;

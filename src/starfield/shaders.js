@@ -4,6 +4,11 @@ import {
   GAUSSIAN_CUTOFF_SIGMA,
   MIN_CORE_PIXELS,
   MIN_GLARE_PIXELS,
+  STAR_SIZE_BRIGHTNESS_LINK,
+  STAR_SIZE_GATE_EXPONENT,
+  STAR_SIZE_GLARE_LINK,
+  STAR_SIZE_MIN_SCALE,
+  STAR_SIZE_RARITY_EXPONENT,
   SUBPIXEL_DENSITY_THRESHOLD_PX,
 } from "./constants.js";
 
@@ -11,11 +16,13 @@ const STAR_VERTEX_SHADER = /* glsl */ `
   attribute vec3 iDirection;
   attribute vec2 iUv;
   attribute vec4 iRandoms;
+  attribute float iSizeGate;
   attribute float iClass;
 
   varying vec2 vUv;
   varying vec3 vDirection;
   varying vec4 vRandoms;
+  varying float vSizeGate;
   varying float vClass;
 
   uniform vec2 uBakeSize;
@@ -26,6 +33,7 @@ const STAR_VERTEX_SHADER = /* glsl */ `
   uniform float uReferenceHeight;
   uniform float uStarSize;
   uniform float uSizeVar;
+  uniform float uLargeStarRarity;
   uniform float uGlareSize;
   uniform float uGlareStr;
 
@@ -35,20 +43,29 @@ const STAR_VERTEX_SHADER = /* glsl */ `
   const float SUBPIXEL_DENSITY_THRESHOLD_PX = ${SUBPIXEL_DENSITY_THRESHOLD_PX.toFixed(2)};
   const float AA_PIN_THRESHOLD_PX = ${AA_PIN_THRESHOLD_PX.toFixed(2)};
   const float GAUSSIAN_CUTOFF_SIGMA = ${GAUSSIAN_CUTOFF_SIGMA.toFixed(1)};
+  const float STAR_SIZE_MIN_SCALE = ${STAR_SIZE_MIN_SCALE.toFixed(2)};
+  const float STAR_SIZE_RARITY_EXPONENT = ${STAR_SIZE_RARITY_EXPONENT.toFixed(1)};
+  const float STAR_SIZE_GATE_EXPONENT = ${STAR_SIZE_GATE_EXPONENT.toFixed(1)};
 
-  float sizeMultiplier(float rSize) {
-    return mix(1.0, mix(0.1, 1.0, rSize), uSizeVar);
+  float sizeRank(float rSize, float rSizeGate) {
+    float baseRank = pow(clamp(rSize, 0.0, 1.0), STAR_SIZE_RARITY_EXPONENT);
+    float gate = mix(1.0, pow(clamp(rSizeGate, 0.0, 1.0), STAR_SIZE_GATE_EXPONENT), uLargeStarRarity);
+    return baseRank * gate;
+  }
+
+  float sizeMultiplier(float rSize, float rSizeGate) {
+    return mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, sizeRank(rSize, rSizeGate)), uSizeVar);
   }
 
   float angularPixel(vec2 textureSize) {
     return PI * max(uTileUvSize.y, 1e-6) / max(textureSize.y, 1.0);
   }
 
-  float splatSupportAngle(float rSize) {
+  float splatSupportAngle(float rSize, float rSizeGate) {
     float bakeAngularPx = angularPixel(uBakeSize);
     float outputAngularPx = angularPixel(uOutputSize);
 
-    float scale = sizeMultiplier(rSize);
+    float scale = sizeMultiplier(rSize, rSizeGate);
     float starRadius = uStarSize * scale * uScreenPixelAngle;
     float screenRadiusPx = uStarSize * scale;
     float pinWeight = 1.0 - smoothstep(SUBPIXEL_DENSITY_THRESHOLD_PX, AA_PIN_THRESHOLD_PX, screenRadiusPx);
@@ -69,7 +86,7 @@ const STAR_VERTEX_SHADER = /* glsl */ `
   }
 
   void main() {
-    float supportAngle = splatSupportAngle(iRandoms.x);
+    float supportAngle = splatSupportAngle(iRandoms.x, iSizeGate);
     float sinPhi = max(sin(iUv.y * PI), 0.015);
     vec2 halfUv = vec2(
       min(1.5, supportAngle / (2.0 * PI * sinPhi)),
@@ -81,6 +98,7 @@ const STAR_VERTEX_SHADER = /* glsl */ `
     vUv = splatUv;
     vDirection = iDirection;
     vRandoms = iRandoms;
+    vSizeGate = iSizeGate;
     vClass = iClass;
     gl_Position = vec4(patchUv * 2.0 - 1.0, 0.0, 1.0);
   }
@@ -92,6 +110,7 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vDirection;
   varying vec4 vRandoms;
+  varying float vSizeGate;
   varying float vClass;
 
   uniform vec2 uBakeSize;
@@ -101,19 +120,24 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
   uniform float uReferenceHeight;
   uniform float uStarSize;
   uniform float uSizeVar;
+  uniform float uLargeStarRarity;
   uniform float uBright;
   uniform float uBrightVar;
   uniform float uGlareSize;
   uniform float uGlareStr;
   uniform float uGlareVar;
   uniform float uColorVar;
-  uniform float uOverlayEnabled;
 
   const float PI = 3.14159265359;
   const float MIN_CORE_PIXELS = ${MIN_CORE_PIXELS.toFixed(2)};
   const float MIN_GLARE_PIXELS = ${MIN_GLARE_PIXELS.toFixed(2)};
   const float SUBPIXEL_DENSITY_THRESHOLD_PX = ${SUBPIXEL_DENSITY_THRESHOLD_PX.toFixed(2)};
   const float AA_PIN_THRESHOLD_PX = ${AA_PIN_THRESHOLD_PX.toFixed(2)};
+  const float STAR_SIZE_MIN_SCALE = ${STAR_SIZE_MIN_SCALE.toFixed(2)};
+  const float STAR_SIZE_RARITY_EXPONENT = ${STAR_SIZE_RARITY_EXPONENT.toFixed(1)};
+  const float STAR_SIZE_GATE_EXPONENT = ${STAR_SIZE_GATE_EXPONENT.toFixed(1)};
+  const float STAR_SIZE_BRIGHTNESS_LINK = ${STAR_SIZE_BRIGHTNESS_LINK.toFixed(2)};
+  const float STAR_SIZE_GLARE_LINK = ${STAR_SIZE_GLARE_LINK.toFixed(2)};
 
   vec3 starColor(float t) {
     vec3 cool = vec3(1.00, 0.55, 0.30);
@@ -140,8 +164,14 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
     ));
   }
 
-  float sizeMultiplier(float rSize) {
-    return mix(1.0, mix(0.1, 1.0, rSize), uSizeVar);
+  float sizeRank(float rSize, float rSizeGate) {
+    float baseRank = pow(clamp(rSize, 0.0, 1.0), STAR_SIZE_RARITY_EXPONENT);
+    float gate = mix(1.0, pow(clamp(rSizeGate, 0.0, 1.0), STAR_SIZE_GATE_EXPONENT), uLargeStarRarity);
+    return baseRank * gate;
+  }
+
+  float sizeMultiplier(float rSize, float rSizeGate) {
+    return mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, sizeRank(rSize, rSizeGate)), uSizeVar);
   }
 
   float angularPixel(vec2 textureSize) {
@@ -149,14 +179,13 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
   }
 
   void main() {
-    if (uOverlayEnabled > 0.5 && vClass > 1.5) discard;
-
     vec3 dir = equirectDirection(vUv);
     float angularDistance = acos(clamp(dot(dir, normalize(vDirection)), -1.0, 1.0));
 
     float bakeAngularPx = angularPixel(uBakeSize);
 
-    float scale = sizeMultiplier(vRandoms.x);
+    float rank = sizeRank(vRandoms.x, vSizeGate);
+    float scale = sizeMultiplier(vRandoms.x, vSizeGate);
     float starRadius = uStarSize * scale * uScreenPixelAngle;
     float screenRadiusPx = uStarSize * scale;
     float subpixelWeight = 1.0 - smoothstep(SUBPIXEL_DENSITY_THRESHOLD_PX * 0.75, SUBPIXEL_DENSITY_THRESHOLD_PX, screenRadiusPx);
@@ -179,8 +208,10 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
       glare *= glareEnergy * normalWeight;
     }
 
-    float glareStr = uGlareStr * mix(1.0, pow(vRandoms.z, 8.0), uGlareVar);
-    float bright = uBright * mix(1.0, pow(vRandoms.y, 3.0) * 3.0, uBrightVar);
+    float linkedBrightRand = mix(vRandoms.y, max(vRandoms.y, rank), STAR_SIZE_BRIGHTNESS_LINK * uSizeVar);
+    float linkedGlareRand = mix(vRandoms.z, max(vRandoms.z, rank), STAR_SIZE_GLARE_LINK * uSizeVar);
+    float glareStr = uGlareStr * mix(1.0, pow(linkedGlareRand, 8.0), uGlareVar);
+    float bright = uBright * mix(1.0, pow(linkedBrightRand, 3.0) * 3.0, uBrightVar);
     vec3 color = starColor(mix(0.5, vRandoms.w, uColorVar));
     vec3 radiance = color * (core + glare * glareStr) * bright;
 
@@ -191,10 +222,12 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
 const OVERLAY_VERTEX_SHADER = /* glsl */ `
   attribute vec3 iDirection;
   attribute vec4 iRandoms;
+  attribute float iSizeGate;
   attribute float iClass;
 
   varying vec2 vLocal;
   varying vec4 vRandoms;
+  varying float vSizeGate;
   varying float vClass;
   varying float vSupportAngle;
 
@@ -203,6 +236,7 @@ const OVERLAY_VERTEX_SHADER = /* glsl */ `
   uniform float uReferenceHeight;
   uniform float uStarSize;
   uniform float uSizeVar;
+  uniform float uLargeStarRarity;
   uniform float uGlareSize;
   uniform float uGlareStr;
 
@@ -210,13 +244,22 @@ const OVERLAY_VERTEX_SHADER = /* glsl */ `
   const float MIN_CORE_PIXELS = ${MIN_CORE_PIXELS.toFixed(2)};
   const float MIN_GLARE_PIXELS = ${MIN_GLARE_PIXELS.toFixed(2)};
   const float GAUSSIAN_CUTOFF_SIGMA = ${GAUSSIAN_CUTOFF_SIGMA.toFixed(1)};
+  const float STAR_SIZE_MIN_SCALE = ${STAR_SIZE_MIN_SCALE.toFixed(2)};
+  const float STAR_SIZE_RARITY_EXPONENT = ${STAR_SIZE_RARITY_EXPONENT.toFixed(1)};
+  const float STAR_SIZE_GATE_EXPONENT = ${STAR_SIZE_GATE_EXPONENT.toFixed(1)};
 
-  float sizeMultiplier(float rSize) {
-    return mix(1.0, mix(0.1, 1.0, rSize), uSizeVar);
+  float sizeRank(float rSize, float rSizeGate) {
+    float baseRank = pow(clamp(rSize, 0.0, 1.0), STAR_SIZE_RARITY_EXPONENT);
+    float gate = mix(1.0, pow(clamp(rSizeGate, 0.0, 1.0), STAR_SIZE_GATE_EXPONENT), uLargeStarRarity);
+    return baseRank * gate;
   }
 
-  float overlaySupportAngle(float rSize) {
-    float scale = sizeMultiplier(rSize);
+  float sizeMultiplier(float rSize, float rSizeGate) {
+    return mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, sizeRank(rSize, rSizeGate)), uSizeVar);
+  }
+
+  float overlaySupportAngle(float rSize, float rSizeGate) {
+    float scale = sizeMultiplier(rSize, rSizeGate);
     float starRadius = uStarSize * scale * uScreenPixelAngle;
     float coreSupportRadius = max(starRadius, MIN_CORE_PIXELS * uScreenPixelAngle);
     float coreSigma = max(coreSupportRadius * 0.42, uScreenPixelAngle * 0.5);
@@ -235,13 +278,14 @@ const OVERLAY_VERTEX_SHADER = /* glsl */ `
     vec3 dir = normalize(iDirection);
     vec3 referenceUp = abs(dir.y) > 0.96 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
     vec3 right = normalize(cross(referenceUp, dir));
-    vec3 up = normalize(cross(dir, right));
-    float supportAngle = overlaySupportAngle(iRandoms.x);
+    vec3 up = normalize(cross(right, dir));
+    float supportAngle = overlaySupportAngle(iRandoms.x, iSizeGate);
     vec3 offset = (right * position.x + up * position.y) * (uRadius * supportAngle);
     vec3 worldPosition = dir * uRadius + offset;
 
     vLocal = position.xy;
     vRandoms = iRandoms;
+    vSizeGate = iSizeGate;
     vClass = iClass;
     vSupportAngle = supportAngle;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPosition, 1.0);
@@ -253,6 +297,7 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
 
   varying vec2 vLocal;
   varying vec4 vRandoms;
+  varying float vSizeGate;
   varying float vClass;
   varying float vSupportAngle;
 
@@ -260,6 +305,7 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
   uniform float uReferenceHeight;
   uniform float uStarSize;
   uniform float uSizeVar;
+  uniform float uLargeStarRarity;
   uniform float uBright;
   uniform float uBrightVar;
   uniform float uGlareSize;
@@ -271,6 +317,11 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
   const float PI = 3.14159265359;
   const float MIN_CORE_PIXELS = ${MIN_CORE_PIXELS.toFixed(2)};
   const float MIN_GLARE_PIXELS = ${MIN_GLARE_PIXELS.toFixed(2)};
+  const float STAR_SIZE_MIN_SCALE = ${STAR_SIZE_MIN_SCALE.toFixed(2)};
+  const float STAR_SIZE_RARITY_EXPONENT = ${STAR_SIZE_RARITY_EXPONENT.toFixed(1)};
+  const float STAR_SIZE_GATE_EXPONENT = ${STAR_SIZE_GATE_EXPONENT.toFixed(1)};
+  const float STAR_SIZE_BRIGHTNESS_LINK = ${STAR_SIZE_BRIGHTNESS_LINK.toFixed(2)};
+  const float STAR_SIZE_GLARE_LINK = ${STAR_SIZE_GLARE_LINK.toFixed(2)};
 
   vec3 starColor(float t) {
     vec3 cool = vec3(1.00, 0.55, 0.30);
@@ -279,13 +330,20 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
     return (t < 0.5) ? mix(cool, mid, t * 2.0) : mix(mid, hot, (t - 0.5) * 2.0);
   }
 
-  float sizeMultiplier(float rSize) {
-    return mix(1.0, mix(0.1, 1.0, rSize), uSizeVar);
+  float sizeRank(float rSize, float rSizeGate) {
+    float baseRank = pow(clamp(rSize, 0.0, 1.0), STAR_SIZE_RARITY_EXPONENT);
+    float gate = mix(1.0, pow(clamp(rSizeGate, 0.0, 1.0), STAR_SIZE_GATE_EXPONENT), uLargeStarRarity);
+    return baseRank * gate;
+  }
+
+  float sizeMultiplier(float rSize, float rSizeGate) {
+    return mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, sizeRank(rSize, rSizeGate)), uSizeVar);
   }
 
   void main() {
     float angularDistance = length(vLocal) * vSupportAngle;
-    float scale = sizeMultiplier(vRandoms.x);
+    float rank = sizeRank(vRandoms.x, vSizeGate);
+    float scale = sizeMultiplier(vRandoms.x, vSizeGate);
     float starRadius = uStarSize * scale * uScreenPixelAngle;
     float coreRadius = max(starRadius, uScreenPixelAngle * 0.1);
     float coreSigma = max(coreRadius * 0.42, uScreenPixelAngle * 0.5);
@@ -301,8 +359,10 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
       glare = exp(-(angularDistance * angularDistance) / max(2.0 * glareSigma * glareSigma, 1e-10)) * glareEnergy;
     }
 
-    float glareStr = uGlareStr * mix(1.0, pow(vRandoms.z, 8.0), uGlareVar);
-    float bright = uBright * mix(1.0, pow(vRandoms.y, 3.0) * 3.0, uBrightVar);
+    float linkedBrightRand = mix(vRandoms.y, max(vRandoms.y, rank), STAR_SIZE_BRIGHTNESS_LINK * uSizeVar);
+    float linkedGlareRand = mix(vRandoms.z, max(vRandoms.z, rank), STAR_SIZE_GLARE_LINK * uSizeVar);
+    float glareStr = uGlareStr * mix(1.0, pow(linkedGlareRand, 8.0), uGlareVar);
+    float bright = uBright * mix(1.0, pow(linkedBrightRand, 3.0) * 3.0, uBrightVar);
     float classBoost = vClass > 2.5 ? 1.28 : 1.0;
     vec3 color = starColor(mix(0.5, vRandoms.w, uColorVar));
     vec3 radiance = color * (core + glare * glareStr) * bright * classBoost * uOverlayStrength;
@@ -424,6 +484,7 @@ export function createOverlayMaterial(uniforms) {
     uniforms,
     transparent: true,
     blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
     depthTest: false,
     depthWrite: false,
     vertexShader: OVERLAY_VERTEX_SHADER,

@@ -1,11 +1,13 @@
 import * as THREE from "three";
 import {
   ALLOCATION_STATES,
+  BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
   BRIGHT_STAR_OVERLAY_ENABLED,
   BRIGHT_STAR_OVERLAY_RADIUS_SCALE,
   BRIGHT_STAR_OVERLAY_STRENGTH,
   CATALOG_PARAMS,
   DEFAULT_ADAPTIVE_QUALITY,
+  DEFAULT_LARGE_STAR_RARITY,
   DOME_RADIUS,
   FALLBACK_STATES,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
@@ -89,19 +91,20 @@ export function createStarfield({ renderer, scene, requestRender }) {
   });
   const initialBakeWidth = defaultPatchLayout.virtualWidth;
   const defaults = {
-    uDensity: 104,
-    uSparsity: 0.79,
-    uStarSize: 0.9,
-    uSizeVar: 0.58,
-    uBright: 1.7,
-    uBrightVar: 0.7,
-    uGlareSize: 1.4,
+    uDensity: 360,
+    uSparsity: 0.005,
+    uStarSize: 5,
+    uSizeVar: 0.95,
+    uLargeStarRarity: DEFAULT_LARGE_STAR_RARITY,
+    uBright: 5,
+    uBrightVar: 0.95,
+    uGlareSize: 7,
     uGlareStr: 0.24,
-    uGlareVar: 0.64,
-    uColorVar: 0.64,
+    uGlareVar: 0.95,
+    uColorVar: 1,
     uSeed: 1,
     bakeWidth: initialBakeWidth,
-    sphereSegments: 128,
+    sphereSegments: 32,
     ...DEFAULT_ADAPTIVE_QUALITY,
   };
 
@@ -134,6 +137,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uSparsity: { value: defaults.uSparsity },
     uStarSize: { value: defaults.uStarSize },
     uSizeVar: { value: defaults.uSizeVar },
+    uLargeStarRarity: { value: defaults.uLargeStarRarity },
     uBright: { value: defaults.uBright },
     uBrightVar: { value: defaults.uBrightVar },
     uGlareSize: { value: defaults.uGlareSize },
@@ -141,7 +145,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uGlareVar: { value: defaults.uGlareVar },
     uColorVar: { value: defaults.uColorVar },
     uSeed: { value: defaults.uSeed },
-    uOverlayEnabled: { value: brightStarOverlayEnabled ? 1 : 0 },
   };
 
   const starMaterial = createStarMaterial(bakeUniforms);
@@ -156,6 +159,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uReferenceHeight: bakeUniforms.uReferenceHeight,
     uStarSize: bakeUniforms.uStarSize,
     uSizeVar: bakeUniforms.uSizeVar,
+    uLargeStarRarity: bakeUniforms.uLargeStarRarity,
     uBright: bakeUniforms.uBright,
     uBrightVar: bakeUniforms.uBrightVar,
     uGlareSize: bakeUniforms.uGlareSize,
@@ -838,6 +842,9 @@ export function createStarfield({ renderer, scene, requestRender }) {
     if (CATALOG_PARAMS.has(key)) {
       markCatalogDirty();
     }
+    if (key === "uLargeStarRarity") {
+      rebuildStarCatalog();
+    }
     pipeline.markPatchDescriptorsStale(CATALOG_PARAMS.has(key) ? "catalog" : "visual");
     updateDemandStats();
     notifyReadouts();
@@ -857,17 +864,18 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function setBrightStarOverlayEnabled(enabled) {
     brightStarOverlayEnabled = BRIGHT_STAR_OVERLAY_ENABLED && Boolean(enabled);
-    bakeUniforms.uOverlayEnabled.value = brightStarOverlayEnabled ? 1 : 0;
-    stats.bakedCandidateStarCount = brightStarOverlayEnabled
-      ? stats.normalStarCount
-      : stats.normalStarCount + stats.brightStarClassCount + stats.heroStarCount;
-    stats.starInstances = stats.bakedCandidateStarCount * STAR_QUERY_SEAM_COPIES;
-    pipeline.markPatchDescriptorsStale("overlay");
-    syncOverlayStats();
+    rebuildStarCatalog();
     updateDemandStats();
     notifyReadouts();
-    pipeline.scheduleBake(0);
+    if (BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS) {
+      pipeline.markPatchDescriptorsStale("overlay");
+      pipeline.scheduleBake(0);
+    }
     requestRender();
+  }
+
+  function getBrightStarOverlayEnabled() {
+    return brightStarOverlayEnabled;
   }
 
   function reseed() {
@@ -991,6 +999,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     setAdaptiveParam,
     setSphereSegments,
     setBrightStarOverlayEnabled,
+    getBrightStarOverlayEnabled,
     setBakeWidth,
     reseed,
     bakeNow: pipeline.bakeNow,
