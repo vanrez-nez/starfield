@@ -1,25 +1,28 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import Stats from "three/addons/libs/stats.module.js";
 import "./styles.css";
 import { createControls } from "./controls.js";
 import { createStarfield } from "./starfield.js";
 
 const HORIZONTAL_FOV = 60;
-const FPS_SAMPLE_WINDOW_MS = 1000;
-const FPS_IDLE_RESET_MS = 900;
 
 const canvas = document.querySelector("#scene");
-const fpsMeter = document.querySelector("#fps-meter");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
   powerPreference: "low-power",
 });
 
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.setClearColor(0x05060a, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const stats = new Stats();
+stats.showPanel(0);
+stats.dom.classList.add("starfield-stats-panel");
+document.body.appendChild(stats.dom);
 
 const scene = new THREE.Scene();
 const drawingBufferSize = new THREE.Vector2();
@@ -54,11 +57,12 @@ const orbitCamera = new THREE.PerspectiveCamera(camera.fov, camera.aspect, camer
 orbitCamera.position.set(0, 0, 1);
 
 const state = {
-  renderQueued: false,
-  fpsIdleTimer: 0,
+  animationFrame: 0,
+  resizePending: false,
+  width: window.innerWidth,
+  height: window.innerHeight,
 };
 
-const fpsFrameTimes = [];
 let starfield = null;
 
 const orbitControls = new OrbitControls(orbitCamera, canvas);
@@ -66,7 +70,9 @@ orbitControls.target.set(0, 0, 0);
 orbitControls.enableRotate = true;
 orbitControls.enablePan = false;
 orbitControls.enableZoom = false;
-orbitControls.enableDamping = false;
+orbitControls.enableDamping = true;
+orbitControls.dampingFactor = 0.06;
+orbitControls.autoRotate = false;
 orbitControls.minPolarAngle = Math.PI / 2 - 1.35;
 orbitControls.maxPolarAngle = Math.PI / 2 + 1.35;
 orbitControls.rotateSpeed = 0.45;
@@ -79,45 +85,30 @@ function syncRenderCameraFromOrbit() {
   camera.updateMatrixWorld();
 }
 
-function updateFpsMeter() {
-  if (!fpsMeter) return;
-
-  const now = performance.now();
-  fpsFrameTimes.push(now);
-  while (fpsFrameTimes.length > 0 && now - fpsFrameTimes[0] > FPS_SAMPLE_WINDOW_MS) {
-    fpsFrameTimes.shift();
-  }
-
-  const elapsed = fpsFrameTimes[fpsFrameTimes.length - 1] - fpsFrameTimes[0];
-  const fps = elapsed > 0 ? Math.round(((fpsFrameTimes.length - 1) * 1000) / elapsed) : 0;
-  fpsMeter.textContent = `FPS ${fps}`;
-
-  window.clearTimeout(state.fpsIdleTimer);
-  state.fpsIdleTimer = window.setTimeout(() => {
-    fpsFrameTimes.length = 0;
-    fpsMeter.textContent = "FPS 0";
-  }, FPS_IDLE_RESET_MS);
-}
-
-function render() {
-  state.renderQueued = false;
+function renderFrame() {
+  stats.begin();
+  applyResizeIfNeeded();
+  orbitControls.update();
   syncRenderCameraFromOrbit();
   starfield.setCameraInfo(cameraInfo(), { notify: false });
   starfield.recordRender();
   renderer.render(scene, camera);
-  updateFpsMeter();
+  stats.end();
 }
 
-function scheduleRender() {
-  if (state.renderQueued) return;
-  state.renderQueued = true;
-  requestAnimationFrame(render);
+function animationLoop() {
+  renderFrame();
+  state.animationFrame = requestAnimationFrame(animationLoop);
+}
+
+function requestRuntimeRender() {
+  // Compatibility hook for starfield internals; the runtime loop is already active.
 }
 
 starfield = createStarfield({
   renderer,
   scene,
-  requestRender: scheduleRender,
+  requestRender: requestRuntimeRender,
 });
 syncRenderCameraFromOrbit();
 starfield.setCameraInfo(cameraInfo());
@@ -125,7 +116,7 @@ starfield.setCameraInfo(cameraInfo());
 function recenter() {
   orbitControls.reset();
   syncRenderCameraFromOrbit();
-  scheduleRender();
+  requestRuntimeRender();
 }
 
 const uiControls = createControls({
@@ -137,7 +128,7 @@ const uiControls = createControls({
   },
   starfield,
   getStats() {
-    render();
+    renderFrame();
     return starfield.collectStats(renderer.info, cameraInfo());
   },
   onRecenter: recenter,
@@ -148,15 +139,21 @@ orbitControls.addEventListener("start", () => {
 });
 orbitControls.addEventListener("change", () => {
   syncRenderCameraFromOrbit();
-  scheduleRender();
+  requestRuntimeRender();
 });
 orbitControls.addEventListener("end", () => {
   canvas.classList.remove("is-dragging");
 });
 
-function resize() {
+function applyResizeIfNeeded({ force = false } = {}) {
   const width = window.innerWidth;
   const height = window.innerHeight;
+  if (!force && !state.resizePending && width === state.width && height === state.height) return;
+
+  state.resizePending = false;
+  state.width = width;
+  state.height = height;
+
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.fov = verticalFovForViewport(HORIZONTAL_FOV, camera.aspect);
@@ -166,17 +163,23 @@ function resize() {
   orbitCamera.updateProjectionMatrix();
   syncRenderCameraFromOrbit();
   starfield.setCameraInfo(cameraInfo());
-  scheduleRender();
+  requestRuntimeRender();
+}
+
+function resize() {
+  state.resizePending = true;
 }
 
 window.addEventListener("resize", resize);
 window.addEventListener("beforeunload", () => {
-  window.clearTimeout(state.fpsIdleTimer);
+  cancelAnimationFrame(state.animationFrame);
   uiControls.dispose();
   orbitControls.dispose();
   starfield.dispose();
+  stats.dom.remove();
   renderer.dispose();
 });
 
-resize();
+applyResizeIfNeeded({ force: true });
 starfield.bakeNow();
+state.animationFrame = requestAnimationFrame(animationLoop);

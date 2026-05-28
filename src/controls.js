@@ -203,6 +203,26 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
 
   let textureSizeValue = null;
   let updatingStatsPanel = false;
+  let uxVisible = true;
+
+  function isUxVisible() {
+    return uxVisible;
+  }
+
+  function setUxVisible(nextVisible) {
+    uxVisible = nextVisible;
+    document.body.classList.toggle("is-ux-hidden", !uxVisible);
+
+    if (uxVisible) {
+      showGpuStatsPanel(collectStatsForPanel());
+      return;
+    }
+
+    hideGpuStatsPanel();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }
 
   function collectStatsForPanel() {
     updatingStatsPanel = true;
@@ -214,7 +234,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   }
 
   function refreshVisibleStatsPanel() {
-    if (updatingStatsPanel || !gpuStatsPanel.classList.contains("is-visible")) return;
+    if (updatingStatsPanel || !isUxVisible() || !gpuStatsPanel.classList.contains("is-visible")) return;
     showGpuStatsPanel(collectStatsForPanel());
   }
 
@@ -435,6 +455,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   }
 
   function printGpuStats() {
+    setUxVisible(true);
     const stats = collectStatsForPanel();
     window.lastStarfieldGpuStats = stats;
     showGpuStatsPanel(stats);
@@ -443,19 +464,14 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     console.groupEnd();
   }
 
-  function toggleGpuStatsPanel() {
-    if (gpuStatsPanel.classList.contains("is-visible")) {
-      hideGpuStatsPanel();
-      return;
-    }
-
-    printGpuStats();
+  function toggleUxVisibility() {
+    setUxVisible(!uxVisible);
   }
 
-  function handleGpuStatsHotkey(event) {
+  function handleUxHotkey(event) {
     if (event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
     event.preventDefault();
-    toggleGpuStatsPanel();
+    toggleUxVisibility();
   }
 
   starfield.setBakeStatusHandler(setBakeStatus);
@@ -463,7 +479,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   buttons.bake.addEventListener("click", () => starfield.bakeNow());
   buttons.seed.addEventListener("click", () => starfield.reseed());
   buttons.recenter.addEventListener("click", onRecenter);
-  document.addEventListener("keydown", handleGpuStatsHotkey, true);
+  document.addEventListener("keydown", handleUxHotkey, true);
   window.printStarfieldGpuStats = printGpuStats;
 
   buildPanel();
@@ -472,7 +488,8 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     refreshReadouts,
     printGpuStats,
     dispose() {
-      document.removeEventListener("keydown", handleGpuStatsHotkey, true);
+      document.removeEventListener("keydown", handleUxHotkey, true);
+      document.body.classList.remove("is-ux-hidden");
       gpuStatsPanel.remove();
     },
   };

@@ -649,6 +649,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function setSphereSegments(value) {
     currentSphereSegments = value;
     rebuildDisplayGeometry();
+    notifyReadouts();
   }
 
   function setBrightStarOverlayEnabled(enabled) {
