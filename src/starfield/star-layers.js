@@ -2,17 +2,55 @@ import * as THREE from "three";
 import {
   BRIGHT_STAR_OVERLAY_STRENGTH,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
+  DEFAULT_WINKLE_AMOUNT,
   DEFAULT_SKY_BACKGROUND_RADIUS,
+  WINKLE_MAX_COUNT,
   sphereVerticalSegmentsFor,
 } from "./constants.js";
 import {
   createCatalogOverlayAndStats,
   createEmptyOverlayGeometry,
+  EMPTY_STAR_POSITIONS,
 } from "./catalog.js";
 import {
   createOverlayMaterial,
   createSkyBackgroundMaterial,
+  createWinkleMaterial,
 } from "./shaders.js";
+
+function createWinkleGeometry(stars = []) {
+  const geometry = new THREE.InstancedBufferGeometry();
+  const count = Math.min(WINKLE_MAX_COUNT, stars.length);
+  const directions = new Float32Array(count * 3);
+  const randoms = new Float32Array(count * 4);
+  const sizeGates = new Float32Array(count);
+  const classes = new Float32Array(count);
+  const winkles = new Float32Array(count * 4);
+
+  for (let index = 0; index < count; index += 1) {
+    const star = stars[index];
+    directions.set([star.x, star.y, star.z], index * 3);
+    randoms.set([star.rSize, star.rBright, star.rGlare, star.rColor], index * 4);
+    sizeGates[index] = star.rSizeGate;
+    classes[index] = star.classId;
+    winkles.set([
+      star.rWinkleRotation * Math.PI * 2,
+      star.rWinklePhase * 97,
+      0.45 + star.rWinkleSpeed * 1.35,
+      star.importance,
+    ], index * 4);
+  }
+
+  geometry.setAttribute("position", new THREE.BufferAttribute(EMPTY_STAR_POSITIONS, 3));
+  geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(directions, 3));
+  geometry.setAttribute("iRandoms", new THREE.InstancedBufferAttribute(randoms, 4));
+  geometry.setAttribute("iSizeGate", new THREE.InstancedBufferAttribute(sizeGates, 1));
+  geometry.setAttribute("iClass", new THREE.InstancedBufferAttribute(classes, 1));
+  geometry.setAttribute("iWinkle", new THREE.InstancedBufferAttribute(winkles, 4));
+  geometry.instanceCount = 0;
+  geometry.userData.availableInstanceCount = count;
+  return geometry;
+}
 
 export function createStarLayerManager({
   scene,
@@ -39,6 +77,18 @@ export function createStarLayerManager({
     overlayStarInstances: 0,
     overlayTriangleCount: 0,
     overlayDrawCalls: 0,
+  };
+  let currentWinkleAmount = THREE.MathUtils.clamp(
+    overlayUniforms.uWinkleAmount?.value ?? DEFAULT_WINKLE_AMOUNT,
+    0,
+    1,
+  );
+  let winkleStats = {
+    winkleAmount: currentWinkleAmount,
+    winkleMaxCount: WINKLE_MAX_COUNT,
+    winkleActiveCount: 0,
+    winkleDrawCalls: 0,
+    winkleTriangles: 0,
   };
 
   function triangleCountForGeometry(geometry) {
@@ -91,6 +141,10 @@ export function createStarLayerManager({
     uGlareStr: overlayUniforms.uGlareStr,
     uGlareVar: overlayUniforms.uGlareVar,
     uColorVar: overlayUniforms.uColorVar,
+    uTime: { value: 0 },
+    uWinkleAmount: overlayUniforms.uWinkleAmount,
+    uWinkleFlashiness: overlayUniforms.uWinkleFlashiness,
+    uSmallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold,
     uOverlayStrength: { value: BRIGHT_STAR_OVERLAY_STRENGTH },
   };
   const brightOverlay = {
@@ -106,6 +160,38 @@ export function createStarLayerManager({
   scene.add(brightOverlay.mesh);
   layers.set(brightOverlay.id, brightOverlay);
 
+  const winkleUniforms = {
+    uRadius: { value: currentOverlayRadius },
+    uScreenPixelAngle: overlayUniforms.uScreenPixelAngle,
+    uStarSize: overlayUniforms.uStarSize,
+    uSizeVar: overlayUniforms.uSizeVar,
+    uLargeStarRarity: overlayUniforms.uLargeStarRarity,
+    uBright: overlayUniforms.uBright,
+    uBrightVar: overlayUniforms.uBrightVar,
+    uGlareSize: overlayUniforms.uGlareSize,
+    uGlareStr: overlayUniforms.uGlareStr,
+    uGlareVar: overlayUniforms.uGlareVar,
+    uColorVar: overlayUniforms.uColorVar,
+    uWinkleMinSize: overlayUniforms.uWinkleMinSize,
+    uWinkleSharpness: overlayUniforms.uWinkleSharpness,
+    uWinkleFlashiness: overlayUniforms.uWinkleFlashiness,
+    uSmallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold,
+    uTime: { value: 0 },
+    uWinkleAmount: overlayUniforms.uWinkleAmount ?? { value: currentWinkleAmount },
+  };
+  const winkleOverlay = {
+    id: "winkleOverlay",
+    geometry: createWinkleGeometry(),
+    material: createWinkleMaterial(winkleUniforms),
+    mesh: null,
+  };
+  winkleOverlay.mesh = new THREE.Mesh(winkleOverlay.geometry, winkleOverlay.material);
+  winkleOverlay.mesh.frustumCulled = false;
+  winkleOverlay.mesh.renderOrder = 21;
+  winkleOverlay.mesh.visible = false;
+  scene.add(winkleOverlay.mesh);
+  layers.set(winkleOverlay.id, winkleOverlay);
+
   function syncBrightOverlayVisibility() {
     const overlayCount = brightOverlay.geometry.instanceCount ?? 0;
     brightOverlay.mesh.visible = brightOverlayEnabled && overlayCount > 0;
@@ -120,24 +206,57 @@ export function createStarLayerManager({
     };
   }
 
+  function syncWinkleVisibility() {
+    const availableCount = Math.min(
+      WINKLE_MAX_COUNT,
+      winkleOverlay.geometry.userData.availableInstanceCount ?? winkleOverlay.geometry.instanceCount ?? 0,
+    );
+    const requestedCount = Math.floor(WINKLE_MAX_COUNT * currentWinkleAmount);
+    const activeCount = brightOverlayEnabled
+      ? Math.min(availableCount, requestedCount)
+      : 0;
+
+    winkleOverlay.geometry.instanceCount = activeCount;
+    winkleOverlay.mesh.visible = brightOverlayEnabled && currentWinkleAmount > 0 && activeCount > 0;
+    winkleStats = {
+      winkleAmount: currentWinkleAmount,
+      winkleMinSize: overlayUniforms.uWinkleMinSize?.value ?? 0,
+      winkleSharpness: overlayUniforms.uWinkleSharpness?.value ?? 0,
+      winkleFlashiness: overlayUniforms.uWinkleFlashiness?.value ?? 0,
+      smallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold?.value ?? 0,
+      winkleMaxCount: WINKLE_MAX_COUNT,
+      winkleActiveCount: activeCount,
+      winkleDrawCalls: winkleOverlay.mesh.visible ? 1 : 0,
+      winkleTriangles: activeCount * 2,
+    };
+  }
+
   function replaceBrightOverlayGeometry(nextGeometry) {
     brightOverlay.mesh.geometry = nextGeometry;
     brightOverlay.geometry.dispose();
     brightOverlay.geometry = nextGeometry;
   }
 
+  function replaceWinkleGeometry(nextGeometry) {
+    winkleOverlay.mesh.geometry = nextGeometry;
+    winkleOverlay.geometry.dispose();
+    winkleOverlay.geometry = nextGeometry;
+  }
+
   function rebuild({ overlayUniforms: nextOverlayUniforms = overlayUniforms, enabled = brightOverlayEnabled } = {}) {
     brightOverlayEnabled = Boolean(enabled);
-    const { overlayGeometry, classStats } = createCatalogOverlayAndStats({
+    const { overlayGeometry, overlayStars, classStats } = createCatalogOverlayAndStats({
       bakeUniforms: nextOverlayUniforms,
       brightStarOverlayEnabled: brightOverlayEnabled,
     });
 
     replaceBrightOverlayGeometry(overlayGeometry);
+    replaceWinkleGeometry(createWinkleGeometry(overlayStars));
     brightOverlayStats = {
       ...classStats,
     };
     syncBrightOverlayVisibility();
+    syncWinkleVisibility();
     requestRender();
 
     return {
@@ -151,6 +270,7 @@ export function createStarLayerManager({
   function setEnabled(enabled) {
     brightOverlayEnabled = Boolean(enabled);
     syncBrightOverlayVisibility();
+    syncWinkleVisibility();
     requestRender();
   }
 
@@ -185,7 +305,9 @@ export function createStarLayerManager({
     if (layerId === "brightOverlay") {
       currentOverlayRadius = nextValue;
       brightOverlayUniforms.uRadius.value = nextValue;
+      winkleUniforms.uRadius.value = nextValue;
       syncBrightOverlayVisibility();
+      syncWinkleVisibility();
       requestRender();
     }
   }
@@ -200,10 +322,32 @@ export function createStarLayerManager({
     requestRender();
   }
 
+  function setWinkleAmount(value) {
+    currentWinkleAmount = THREE.MathUtils.clamp(Number(value) || 0, 0, 1);
+    winkleUniforms.uWinkleAmount.value = currentWinkleAmount;
+    syncWinkleVisibility();
+    requestRender();
+  }
+
+  function advanceRuntime() {
+    const flashiness = overlayUniforms.uWinkleFlashiness?.value ?? 0;
+    const effectsActive = brightOverlayEnabled && currentWinkleAmount > 0 && (winkleOverlay.mesh.visible || flashiness > 0);
+    if (!effectsActive) return false;
+    const time = performance.now() * 0.001;
+    brightOverlayUniforms.uTime.value = time;
+    winkleUniforms.uTime.value = time;
+    return true;
+  }
+
   function collectStats() {
     return {
       ...backgroundLayerStats,
       ...brightOverlayStats,
+      ...winkleStats,
+      winkleMinSize: overlayUniforms.uWinkleMinSize?.value ?? 0,
+      winkleSharpness: overlayUniforms.uWinkleSharpness?.value ?? 0,
+      winkleFlashiness: overlayUniforms.uWinkleFlashiness?.value ?? 0,
+      smallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold?.value ?? 0,
     };
   }
 
@@ -222,6 +366,8 @@ export function createStarLayerManager({
     setLayerEnabled,
     setLayerRadius,
     setSphereSegments,
+    setWinkleAmount,
+    advanceRuntime,
     collectStats,
     dispose,
   };

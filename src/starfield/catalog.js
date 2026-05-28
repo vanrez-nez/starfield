@@ -13,6 +13,7 @@ import {
   qFromV,
   recordStarClass,
   screenPixelAngleFromInfo,
+  visualImportanceForStar,
   wrapIndex,
   MIN_CORE_PIXELS,
   MIN_GLARE_PIXELS,
@@ -94,6 +95,9 @@ export function starFromCell(grid, column, row, largeStarRarity = 0) {
   const rGlare = hashCellUnit(grid.seed, wrappedColumn, row, 5);
   const rColor = hashCellUnit(grid.seed, wrappedColumn, row, 6);
   const rSizeGate = hashCellUnit(grid.seed, wrappedColumn, row, 7);
+  const rWinkleRotation = hashCellUnit(grid.seed, wrappedColumn, row, 8);
+  const rWinklePhase = hashCellUnit(grid.seed, wrappedColumn, row, 9);
+  const rWinkleSpeed = hashCellUnit(grid.seed, wrappedColumn, row, 10);
 
   return {
     cellId: `${wrappedColumn}:${row}`,
@@ -109,6 +113,9 @@ export function starFromCell(grid, column, row, largeStarRarity = 0) {
     rGlare,
     rColor,
     rSizeGate,
+    rWinkleRotation,
+    rWinklePhase,
+    rWinkleSpeed,
     classId: classifyStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare),
   };
 }
@@ -229,10 +236,7 @@ export function createStarGeometryForDescriptor({
 export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEnabled }) {
   const grid = currentStarGrid(bakeUniforms);
   const largeStarRarity = largeStarRarityFromUniforms(bakeUniforms);
-  const overlayDirections = [];
-  const overlayRandoms = [];
-  const overlaySizeGates = [];
-  const overlayClasses = [];
+  const overlayStars = [];
   const classStats = emptyStarClassStats();
 
   for (let row = 0; row < grid.rows; row += 1) {
@@ -243,13 +247,37 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
       recordStarClass(classStats, star.classId);
 
       if (brightStarOverlayEnabled && (star.classId === STAR_CLASSES.BRIGHT || star.classId === STAR_CLASSES.HERO)) {
-        overlayDirections.push(star.x, star.y, star.z);
-        overlayRandoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
-        overlaySizeGates.push(star.rSizeGate);
-        overlayClasses.push(star.classId);
+        const importance = visualImportanceForStar(
+          star.rSize,
+          star.rSizeGate,
+          largeStarRarity,
+          star.rBright,
+          star.rGlare,
+        );
+        overlayStars.push({
+          ...star,
+          importance,
+        });
       }
     }
   }
+
+  overlayStars.sort((a, b) => {
+    const byImportance = b.importance - a.importance;
+    if (Math.abs(byImportance) > 1e-9) return byImportance;
+    return a.cellId.localeCompare(b.cellId);
+  });
+
+  const overlayDirections = [];
+  const overlayRandoms = [];
+  const overlaySizeGates = [];
+  const overlayClasses = [];
+  overlayStars.forEach((star) => {
+    overlayDirections.push(star.x, star.y, star.z);
+    overlayRandoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
+    overlaySizeGates.push(star.rSizeGate);
+    overlayClasses.push(star.classId);
+  });
 
   const nextOverlayGeometry = createEmptyOverlayGeometry();
   nextOverlayGeometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(overlayDirections), 3));
@@ -272,6 +300,7 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
   return {
     classStats: finalizedClassStats,
     overlayGeometry: nextOverlayGeometry,
+    overlayStars,
   };
 }
 

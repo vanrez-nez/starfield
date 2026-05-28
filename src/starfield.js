@@ -8,6 +8,11 @@ import {
   DEFAULT_BAKED_STAR_RADIUS,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
   DEFAULT_LARGE_STAR_RARITY,
+  DEFAULT_SMALL_BLINK_THRESHOLD,
+  DEFAULT_WINKLE_AMOUNT,
+  DEFAULT_WINKLE_FLASHINESS,
+  DEFAULT_WINKLE_MIN_SIZE,
+  DEFAULT_WINKLE_SHARPNESS,
   DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
@@ -113,6 +118,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     bakedStarsRadius: DEFAULT_BAKED_STAR_RADIUS,
     brightOverlayEnabled: BRIGHT_STAR_OVERLAY_ENABLED,
     brightOverlayRadius: DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
+    uWinkleAmount: DEFAULT_WINKLE_AMOUNT,
+    uWinkleMinSize: DEFAULT_WINKLE_MIN_SIZE,
+    uWinkleSharpness: DEFAULT_WINKLE_SHARPNESS,
+    uWinkleFlashiness: DEFAULT_WINKLE_FLASHINESS,
+    uSmallBlinkThreshold: DEFAULT_SMALL_BLINK_THRESHOLD,
     ...DEFAULT_ADAPTIVE_QUALITY,
   };
 
@@ -130,7 +140,14 @@ export function createStarfield({ renderer, scene, requestRender }) {
     brightOverlay: {
       enabled: defaults.brightOverlayEnabled,
       radius: defaults.brightOverlayRadius,
-      params: { ...defaultStarParams },
+      params: {
+        ...defaultStarParams,
+        uWinkleAmount: defaults.uWinkleAmount,
+        uWinkleMinSize: defaults.uWinkleMinSize,
+        uWinkleSharpness: defaults.uWinkleSharpness,
+        uWinkleFlashiness: defaults.uWinkleFlashiness,
+        uSmallBlinkThreshold: defaults.uSmallBlinkThreshold,
+      },
     },
   };
   const adaptiveQuality = { ...DEFAULT_ADAPTIVE_QUALITY, adaptiveResolution: true };
@@ -187,6 +204,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uGlareVar: { value: layerState.brightOverlay.params.uGlareVar },
     uColorVar: { value: layerState.brightOverlay.params.uColorVar },
     uSeed: { value: layerState.brightOverlay.params.uSeed },
+    uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount },
+    uWinkleMinSize: { value: layerState.brightOverlay.params.uWinkleMinSize },
+    uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness },
+    uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness },
+    uSmallBlinkThreshold: { value: layerState.brightOverlay.params.uSmallBlinkThreshold },
   };
   layerState.bakedStars.uniforms = bakeUniforms;
   layerState.brightOverlay.uniforms = overlayUniforms;
@@ -493,6 +515,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     stats.overlayLayerSparsity = layerState.brightOverlay.params.uSparsity;
     stats.overlayLayerSeed = layerState.brightOverlay.params.uSeed;
     stats.overlayLayerStarCount = catalogStarCount(overlayUniforms);
+    stats.winkleAmount = layerState.brightOverlay.params.uWinkleAmount;
+    stats.winkleMinSize = layerState.brightOverlay.params.uWinkleMinSize;
+    stats.winkleSharpness = layerState.brightOverlay.params.uWinkleSharpness;
+    stats.winkleFlashiness = layerState.brightOverlay.params.uWinkleFlashiness;
+    stats.smallBlinkThreshold = layerState.brightOverlay.params.uSmallBlinkThreshold;
     stats.overlayCatalogDirty = overlayCatalogDirty;
   }
 
@@ -916,6 +943,21 @@ export function createStarfield({ renderer, scene, requestRender }) {
     }
 
     if (layerId === "brightOverlay") {
+      if (
+        key === "uWinkleAmount"
+        || key === "uWinkleMinSize"
+        || key === "uWinkleSharpness"
+        || key === "uWinkleFlashiness"
+        || key === "uSmallBlinkThreshold"
+      ) {
+        if (key === "uWinkleAmount") {
+          starLayers.setWinkleAmount(nextValue);
+        }
+        syncOverlayStats();
+        notifyReadouts();
+        requestRender();
+        return;
+      }
       if (CATALOG_PARAMS.has(key) || key === "uLargeStarRarity") {
         markCatalogDirty("brightOverlay");
         rebuildOverlayCatalog();
@@ -1085,6 +1127,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function recordRender() {
     stats.renders += 1;
+    starLayers.advanceRuntime();
     if (skydome.activeBlendCount > 0 && skydome.advancePatchBlends()) {
       requestRender();
     }
