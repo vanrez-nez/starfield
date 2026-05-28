@@ -17,6 +17,8 @@ const PARAMS = [
   { key: "uColorVar", label: "Color Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
 ];
 
+const STATS_PANEL_REFRESH_MS = 250;
+
 function updateSliderFill(input, min, max) {
   const value = Number(input.value);
   input.style.setProperty("--fill", `${((value - min) / (max - min)) * 100}%`);
@@ -186,6 +188,8 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
 
   let updatingStatsPanel = false;
   let uxVisible = true;
+  let statsRefreshTimer = 0;
+  let lastStatsRefreshAt = 0;
   const collapsedStatsGroups = new Set();
 
   function isUxVisible() {
@@ -197,7 +201,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     document.body.classList.toggle("is-ux-hidden", !uxVisible);
 
     if (uxVisible) {
-      showGpuStatsPanel(collectStatsForPanel());
+      refreshVisibleStatsPanel({ force: true });
       return;
     }
 
@@ -207,18 +211,42 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     }
   }
 
-  function collectStatsForPanel() {
+  function collectStatsForPanel(options = {}) {
     updatingStatsPanel = true;
     try {
-      return getStats();
+      return getStats(options);
     } finally {
       updatingStatsPanel = false;
     }
   }
 
-  function refreshVisibleStatsPanel() {
-    if (updatingStatsPanel || !isUxVisible() || !gpuStatsPanel.classList.contains("is-visible")) return;
-    showGpuStatsPanel(collectStatsForPanel());
+  function scheduleNextStatsPanelRefresh() {
+    if (statsRefreshTimer || !isUxVisible() || !gpuStatsPanel.classList.contains("is-visible")) return;
+    statsRefreshTimer = window.setTimeout(() => {
+      statsRefreshTimer = 0;
+      refreshVisibleStatsPanel({ force: true });
+    }, STATS_PANEL_REFRESH_MS);
+  }
+
+  function refreshVisibleStatsPanel({ force = false } = {}) {
+    if (updatingStatsPanel || !isUxVisible()) return;
+    if (!force && !gpuStatsPanel.classList.contains("is-visible")) return;
+    const now = performance.now();
+    const elapsed = now - lastStatsRefreshAt;
+
+    if (!force && elapsed < STATS_PANEL_REFRESH_MS) {
+      if (!statsRefreshTimer) {
+        statsRefreshTimer = window.setTimeout(() => {
+          statsRefreshTimer = 0;
+          refreshVisibleStatsPanel({ force: true });
+        }, STATS_PANEL_REFRESH_MS - elapsed);
+      }
+      return;
+    }
+
+    lastStatsRefreshAt = now;
+    showGpuStatsPanel(collectStatsForPanel({ detail: "panel" }));
+    scheduleNextStatsPanelRefresh();
   }
 
   function setBakeStatus(label, disabled = false) {
@@ -226,7 +254,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     buttons.bake.disabled = disabled;
   }
 
-  function refreshReadouts(readouts = starfield.getReadouts()) {
+  function refreshReadouts() {
     refreshVisibleStatsPanel();
   }
 
@@ -448,12 +476,14 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   }
 
   function hideGpuStatsPanel() {
+    clearTimeout(statsRefreshTimer);
+    statsRefreshTimer = 0;
     gpuStatsPanel.classList.remove("is-visible");
   }
 
   function printGpuStats() {
     setUxVisible(true);
-    const stats = collectStatsForPanel();
+    const stats = collectStatsForPanel({ detail: "debug" });
     window.lastStarfieldGpuStats = stats;
     showGpuStatsPanel(stats);
     console.groupCollapsed("[Starfield GPU Stats]");
@@ -485,6 +515,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     refreshReadouts,
     printGpuStats,
     dispose() {
+      clearTimeout(statsRefreshTimer);
       document.removeEventListener("keydown", handleUxHotkey, true);
       document.body.classList.remove("is-ux-hidden");
       gpuStatsPanel.remove();

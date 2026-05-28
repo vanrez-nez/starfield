@@ -903,18 +903,29 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function setCameraInfo(cameraInfo, options = {}) {
     const { notify = true } = options;
     const previousScreenKey = screenBakeSignature().key;
-    currentCameraInfo = {
+    const nextCameraInfo = {
       ...currentCameraInfo,
       ...cameraInfo,
     };
-    const nextScreenKey = screenBakeSignature().key;
+    const nextScreenKey = screenBakeSignature(nextCameraInfo).key;
     const screenChanged = nextScreenKey !== previousScreenKey;
+    const shouldInitializeLayout = !layoutInitialized;
+
+    currentCameraInfo = nextCameraInfo;
     stats.horizontalFov = currentCameraInfo.horizontalFov;
     stats.verticalFov = currentCameraInfo.verticalFov;
     bakeUniforms.uScreenPixelAngle.value = screenPixelAngleFromInfo(currentCameraInfo);
+
+    if (!shouldInitializeLayout && !screenChanged) {
+      if (notify) {
+        notifyReadouts();
+      }
+      return false;
+    }
+
     updateDemandStats();
 
-    if (!layoutInitialized) {
+    if (shouldInitializeLayout) {
       layoutInitialized = true;
       applyAutomaticPatchLayout("initial", { bake: false });
     } else if (screenChanged) {
@@ -927,17 +938,18 @@ export function createStarfield({ renderer, scene, requestRender }) {
     if (notify) {
       notifyReadouts();
     }
+    return true;
   }
 
   function recordRender() {
     stats.renders += 1;
-    if (skydome.advancePatchBlends()) {
+    if (skydome.activeBlendCount > 0 && skydome.advancePatchBlends()) {
       requestRender();
     }
   }
 
-  function collectStats(rendererInfo, cameraInfo = {}) {
-    return collectStatsPayload(makeStatsContext(), rendererInfo, cameraInfo);
+  function collectStats(rendererInfo, cameraInfo = {}, options = {}) {
+    return collectStatsPayload(makeStatsContext(), rendererInfo, cameraInfo, options);
   }
 
   function dispose() {

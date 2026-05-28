@@ -33,23 +33,6 @@ function verticalFovForViewport(horizontalFov, aspect) {
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(horizontalRadians * 0.5) / Math.max(aspect, 0.001)));
 }
 
-function cameraInfo() {
-  renderer.getDrawingBufferSize(drawingBufferSize);
-  camera.getWorldDirection(cameraForward);
-  return {
-    horizontalFov: HORIZONTAL_FOV,
-    verticalFov: Number(camera.fov.toFixed(2)),
-    screenWidth: drawingBufferSize.x,
-    screenHeight: drawingBufferSize.y,
-    cssWidth: window.innerWidth,
-    cssHeight: window.innerHeight,
-    pixelRatio: renderer.getPixelRatio(),
-    forwardX: cameraForward.x,
-    forwardY: cameraForward.y,
-    forwardZ: cameraForward.z,
-  };
-}
-
 const initialAspect = window.innerWidth / window.innerHeight;
 const camera = new THREE.PerspectiveCamera(verticalFovForViewport(HORIZONTAL_FOV, initialAspect), initialAspect, 0.1, 30);
 camera.position.set(0, 0, 0);
@@ -61,9 +44,23 @@ const state = {
   resizePending: false,
   width: window.innerWidth,
   height: window.innerHeight,
+  pixelRatio: Math.min(window.devicePixelRatio, 2),
 };
 
 let starfield = null;
+
+const cachedCameraInfo = {
+  horizontalFov: HORIZONTAL_FOV,
+  verticalFov: Number(camera.fov.toFixed(2)),
+  screenWidth: 1,
+  screenHeight: 1,
+  cssWidth: state.width,
+  cssHeight: state.height,
+  pixelRatio: state.pixelRatio,
+  forwardX: 0,
+  forwardY: 0,
+  forwardZ: -1,
+};
 
 const orbitControls = new OrbitControls(orbitCamera, canvas);
 orbitControls.target.set(0, 0, 0);
@@ -85,12 +82,34 @@ function syncRenderCameraFromOrbit() {
   camera.updateMatrixWorld();
 }
 
+function updateCameraInfoCache({ screen = false } = {}) {
+  if (screen) {
+    renderer.getDrawingBufferSize(drawingBufferSize);
+    cachedCameraInfo.horizontalFov = HORIZONTAL_FOV;
+    cachedCameraInfo.verticalFov = Number(camera.fov.toFixed(2));
+    cachedCameraInfo.screenWidth = drawingBufferSize.x;
+    cachedCameraInfo.screenHeight = drawingBufferSize.y;
+    cachedCameraInfo.cssWidth = state.width;
+    cachedCameraInfo.cssHeight = state.height;
+    cachedCameraInfo.pixelRatio = renderer.getPixelRatio();
+  }
+
+  camera.getWorldDirection(cameraForward);
+  cachedCameraInfo.forwardX = cameraForward.x;
+  cachedCameraInfo.forwardY = cameraForward.y;
+  cachedCameraInfo.forwardZ = cameraForward.z;
+  return cachedCameraInfo;
+}
+
+function cameraInfo({ screen = false } = {}) {
+  return { ...updateCameraInfoCache({ screen }) };
+}
+
 function renderFrame() {
   stats.begin();
   applyResizeIfNeeded();
   orbitControls.update();
   syncRenderCameraFromOrbit();
-  starfield.setCameraInfo(cameraInfo(), { notify: false });
   starfield.recordRender();
   renderer.render(scene, camera);
   stats.end();
@@ -111,7 +130,7 @@ starfield = createStarfield({
   requestRender: requestRuntimeRender,
 });
 syncRenderCameraFromOrbit();
-starfield.setCameraInfo(cameraInfo());
+starfield.setCameraInfo(cameraInfo({ screen: true }));
 
 function recenter() {
   orbitControls.reset();
@@ -127,19 +146,16 @@ const uiControls = createControls({
     recenter: document.querySelector("#recenterBtn"),
   },
   starfield,
-  getStats() {
-    renderFrame();
-    return starfield.collectStats(renderer.info, cameraInfo());
+  getStats(options = {}) {
+    applyResizeIfNeeded();
+    syncRenderCameraFromOrbit();
+    return starfield.collectStats(renderer.info, cameraInfo({ screen: true }), options);
   },
   onRecenter: recenter,
 });
 
 orbitControls.addEventListener("start", () => {
   canvas.classList.add("is-dragging");
-});
-orbitControls.addEventListener("change", () => {
-  syncRenderCameraFromOrbit();
-  requestRuntimeRender();
 });
 orbitControls.addEventListener("end", () => {
   canvas.classList.remove("is-dragging");
@@ -148,12 +164,15 @@ orbitControls.addEventListener("end", () => {
 function applyResizeIfNeeded({ force = false } = {}) {
   const width = window.innerWidth;
   const height = window.innerHeight;
-  if (!force && !state.resizePending && width === state.width && height === state.height) return;
+  const pixelRatio = Math.min(window.devicePixelRatio, 2);
+  if (!force && !state.resizePending && width === state.width && height === state.height && pixelRatio === state.pixelRatio) return;
 
   state.resizePending = false;
   state.width = width;
   state.height = height;
+  state.pixelRatio = pixelRatio;
 
+  renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.fov = verticalFovForViewport(HORIZONTAL_FOV, camera.aspect);
@@ -162,7 +181,7 @@ function applyResizeIfNeeded({ force = false } = {}) {
   orbitCamera.fov = camera.fov;
   orbitCamera.updateProjectionMatrix();
   syncRenderCameraFromOrbit();
-  starfield.setCameraInfo(cameraInfo());
+  starfield.setCameraInfo(cameraInfo({ screen: true }));
   requestRuntimeRender();
 }
 

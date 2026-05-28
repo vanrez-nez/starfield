@@ -444,7 +444,7 @@ export function updatePatchDescriptorDemand(ctx, demand) {
   });
 }
 
-export function patchDescriptorSummary(ctx) {
+export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
   const {
     adaptiveQuality,
     patchDescriptors,
@@ -515,7 +515,7 @@ export function patchDescriptorSummary(ctx) {
     ].join(" ")).join(" | ")
     : "none";
 
-  return {
+  const summary = {
     patchDescriptorCount: patchDescriptors.length,
     descriptorCount: patchDescriptors.length,
     residentPatchCount: patchDescriptors.filter((descriptor) => descriptor.state === PATCH_STATES.RESIDENT).length,
@@ -582,7 +582,10 @@ export function patchDescriptorSummary(ctx) {
     highestPriorityPatch: topPriorityPatches[0]?.id ?? "none",
     highestPriority: topPriorityPatches[0]?.priority ?? 0,
     lowestPriority: prioritySorted[prioritySorted.length - 1]?.priority ?? 0,
-    patchDescriptorDebug: patchDescriptors.map((descriptor) => ({
+  };
+
+  if (includeDebug) {
+    summary.patchDescriptorDebug = patchDescriptors.map((descriptor) => ({
       id: descriptor.id,
       x: descriptor.x,
       y: descriptor.y,
@@ -632,11 +635,13 @@ export function patchDescriptorSummary(ctx) {
       priorityStaleWeight: descriptor.priorityStaleWeight,
       priorityMemoryCost: descriptor.priorityMemoryCost,
       priorityMemoryCostBytes: descriptor.priorityMemoryCostBytes,
-    })),
-  };
+    }));
+  }
+
+  return summary;
 }
 
-export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}) {
+export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail = "panel" } = {}) {
   const {
     currentBakeWidth,
     currentPatchLayout,
@@ -645,17 +650,14 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}) {
     stats,
     maxTextureSize,
     accumulationTypeLabel,
-    setCameraInfo,
   } = ctx;
-  if (cameraInfo.horizontalFov !== undefined && cameraInfo.verticalFov !== undefined) {
-    setCameraInfo(cameraInfo);
-  }
+  const includeDebug = detail === "debug";
 
   const demand = computeDemandReadouts(ctx);
   const memory = computeMemoryReadouts(ctx, demand);
   updatePatchDescriptorDemand(ctx, demand);
   ctx.syncOverlayStats();
-  const descriptors = patchDescriptorSummary(ctx);
+  const descriptors = patchDescriptorSummary(ctx, { includeDebug });
   const capReadouts = computeCapReadouts({
     currentPatchLayout,
     currentSupersample,
@@ -697,7 +699,13 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}) {
     estimatedTextureBytes: memory.totalAllocatedBytes,
     maxTextureSize,
   };
+  if (!includeDebug) {
+    delete result.patchDescriptorDebug;
+  }
   Object.assign(stats, result);
+  if (!includeDebug) {
+    delete stats.patchDescriptorDebug;
+  }
   return result;
 }
 

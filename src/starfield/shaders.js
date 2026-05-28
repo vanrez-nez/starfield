@@ -393,10 +393,6 @@ const PATCH_DOME_FRAGMENT_SHADER = /* glsl */ `
   void main() {
     vec2 skyUv = directionToEquirectUv(vDirection);
     vec2 localUv = (skyUv - uContentUvMin) / uContentUvSize;
-    if (localUv.x < -0.000001 || localUv.x > 1.000001 || localUv.y < -0.000001 || localUv.y > 1.000001) {
-      discard;
-    }
-
     vec2 clampedLocalUv = clamp(localUv, 0.0, 1.0);
     vec2 currentPatchUv = uCurrentInnerOffset + clampedLocalUv * uCurrentInnerScale;
     vec4 currentColor = texture2D(uCurrentTexture, currentPatchUv);

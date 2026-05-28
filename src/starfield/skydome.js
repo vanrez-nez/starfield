@@ -22,12 +22,24 @@ export function createSkydomeManager({
   const activePatchBlends = new Set();
   scene.add(bakedDomeGroup);
 
-  function createDomeGeometry() {
+  function createDomeGeometry(descriptor) {
     const sphereSegments = getSphereSegments();
+    const sphereVerticalSegments = sphereVerticalSegmentsFor(sphereSegments);
+    const horizontalSegments = Math.max(3, Math.ceil(sphereSegments * Math.max(descriptor.uvSize.x, 0.001)));
+    const verticalSegments = Math.max(2, Math.ceil(sphereVerticalSegments * Math.max(descriptor.uvSize.y, 0.001)));
+    const phiStart = (descriptor.uvMin.x - 0.25) * Math.PI * 2;
+    const phiLength = descriptor.uvSize.x * Math.PI * 2;
+    const thetaStart = descriptor.uvMin.y * Math.PI;
+    const thetaLength = descriptor.uvSize.y * Math.PI;
+
     return new THREE.SphereGeometry(
       DOME_RADIUS,
-      sphereSegments,
-      sphereVerticalSegmentsFor(sphereSegments),
+      horizontalSegments,
+      verticalSegments,
+      phiStart,
+      phiLength,
+      thetaStart,
+      thetaLength,
     );
   }
 
@@ -43,7 +55,7 @@ export function createSkydomeManager({
   }
 
   function createPatchDomeMesh(descriptor) {
-    const geometry = createDomeGeometry();
+    const geometry = createDomeGeometry(descriptor);
     const material = createPatchDomeMaterial({
       descriptor,
       visibleTarget: visibleTargetForDescriptor(descriptor),
