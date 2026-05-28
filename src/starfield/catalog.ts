@@ -19,7 +19,35 @@ import {
   MIN_GLARE_PIXELS,
   GAUSSIAN_CUTOFF_SIGMA,
   catalogSeed,
-} from "./constants.js";
+} from "./constants";
+import type {
+  BakeUniforms,
+  CameraInfo,
+  CatalogOverlayResult,
+  CatalogStar,
+  PatchDescriptor,
+  StarfieldStats,
+  StarUniforms,
+} from "./types";
+
+type CatalogCellStar = Omit<CatalogStar, "importance">;
+
+interface StarGrid {
+  columns: number;
+  rows: number;
+  density: number;
+  densityScale: number;
+  activationThreshold: number;
+  seed: number;
+}
+
+interface StarInstanceArrays {
+  directions: number[];
+  uvs: number[];
+  randoms: number[];
+  sizeGates: number[];
+  classes: number[];
+}
 
 export const EMPTY_STAR_POSITIONS = new Float32Array([
   -1, -1, 0,
@@ -30,7 +58,7 @@ export const EMPTY_STAR_POSITIONS = new Float32Array([
   -1, 1, 0,
 ]);
 
-export function createEmptyStarGeometry() {
+export function createEmptyStarGeometry(): THREE.InstancedBufferGeometry {
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(EMPTY_STAR_POSITIONS, 3));
   geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(0), 3));
@@ -42,7 +70,7 @@ export function createEmptyStarGeometry() {
   return geometry;
 }
 
-export function createEmptyOverlayGeometry() {
+export function createEmptyOverlayGeometry(): THREE.InstancedBufferGeometry {
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(EMPTY_STAR_POSITIONS, 3));
   geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(0), 3));
@@ -53,7 +81,7 @@ export function createEmptyOverlayGeometry() {
   return geometry;
 }
 
-export function currentStarGrid(bakeUniforms) {
+export function currentStarGrid(bakeUniforms: Pick<StarUniforms, "uDensity" | "uSeed">): StarGrid {
   const density = Math.max(1, Math.round(bakeUniforms.uDensity.value));
   const densityScale = clamp(density / STAR_CATALOG_BASE_DENSITY, 0, 1);
   const activationThreshold = densityScale * densityScale;
@@ -67,23 +95,32 @@ export function currentStarGrid(bakeUniforms) {
   };
 }
 
-export function catalogStarCount(bakeUniforms) {
+export function catalogStarCount(bakeUniforms: Pick<StarUniforms, "uDensity" | "uSeed">): number {
   const grid = currentStarGrid(bakeUniforms);
   return Math.round(grid.columns * grid.rows * grid.activationThreshold);
 }
 
-function largeStarRarityFromUniforms(bakeUniforms) {
+function largeStarRarityFromUniforms(bakeUniforms: Partial<Pick<StarUniforms, "uLargeStarRarity">>): number {
   return clamp(bakeUniforms.uLargeStarRarity?.value ?? 0, 0, 1);
 }
 
-export function overlayCandidateStarCount({ bakeUniforms, catalogDirty, stats }) {
+export function overlayCandidateStarCount({
+  bakeUniforms,
+  catalogDirty,
+  stats,
+}: {
+  bakeUniforms: Pick<StarUniforms, "uDensity" | "uSeed">;
+  catalogDirty: boolean;
+  stats: StarfieldStats;
+}): number {
   const totalStarCount = catalogStarCount(bakeUniforms);
-  return !catalogDirty && stats.starClassTotal > 0
-    ? stats.overlayCandidateStarCount
+  const starClassTotal = Number(stats.starClassTotal) || 0;
+  return !catalogDirty && starClassTotal > 0
+    ? Number(stats.overlayCandidateStarCount) || 0
     : totalStarCount * BRIGHT_STAR_FRACTION;
 }
 
-function starFromCell(grid, column, row, largeStarRarity = 0) {
+function starFromCell(grid: StarGrid, column: number, row: number, largeStarRarity = 0): CatalogCellStar | null {
   if (row < 0 || row >= grid.rows) return null;
 
   const wrappedColumn = wrapIndex(column, grid.columns);
@@ -124,7 +161,7 @@ function starFromCell(grid, column, row, largeStarRarity = 0) {
   };
 }
 
-function appendStarInstances({ directions, uvs, randoms, sizeGates, classes }, star) {
+function appendStarInstances({ directions, uvs, randoms, sizeGates, classes }: StarInstanceArrays, star: CatalogCellStar): void {
   for (let seam = -1; seam <= 1; seam += 1) {
     directions.push(star.x, star.y, star.z);
     uvs.push(star.u + seam, star.v);
@@ -134,7 +171,7 @@ function appendStarInstances({ directions, uvs, randoms, sizeGates, classes }, s
   }
 }
 
-function createGeometryFromInstanceArrays({ directions, uvs, randoms, sizeGates, classes }) {
+function createGeometryFromInstanceArrays({ directions, uvs, randoms, sizeGates, classes }: StarInstanceArrays): THREE.InstancedBufferGeometry {
   const geometry = createEmptyStarGeometry();
   geometry.setAttribute("iDirection", new THREE.InstancedBufferAttribute(new Float32Array(directions), 3));
   geometry.setAttribute("iUv", new THREE.InstancedBufferAttribute(new Float32Array(uvs), 2));
@@ -145,7 +182,13 @@ function createGeometryFromInstanceArrays({ directions, uvs, randoms, sizeGates,
   return geometry;
 }
 
-function maxStarSupportAngle({ bakeUniforms, currentCameraInfo }) {
+function maxStarSupportAngle({
+  bakeUniforms,
+  currentCameraInfo,
+}: {
+  bakeUniforms: Pick<BakeUniforms, "uStarSize" | "uGlareSize">;
+  currentCameraInfo: CameraInfo;
+}): number {
   const screenAngularPx = screenPixelAngleFromInfo(currentCameraInfo);
   const coreRadius = Math.max(
     bakeUniforms.uStarSize.value * screenAngularPx,
@@ -158,7 +201,7 @@ function maxStarSupportAngle({ bakeUniforms, currentCameraInfo }) {
   return Math.max(coreRadius * 0.45, glareRadius * 0.36, screenAngularPx) * GAUSSIAN_CUTOFF_SIGMA;
 }
 
-function uvRangeIntersectsColumn(uMin, uMax, column, columns) {
+function uvRangeIntersectsColumn(uMin: number, uMax: number, column: number, columns: number): boolean {
   if (uMax - uMin >= 1) return true;
 
   const cellMin = column / columns;
@@ -175,7 +218,13 @@ export function createStarGeometryForDescriptor({
   currentCameraInfo,
   brightStarOverlayEnabled,
   stats,
-}) {
+}: {
+  descriptor: PatchDescriptor;
+  bakeUniforms: BakeUniforms;
+  currentCameraInfo: CameraInfo;
+  brightStarOverlayEnabled: boolean;
+  stats: StarfieldStats;
+}): THREE.InstancedBufferGeometry {
   const grid = currentStarGrid(bakeUniforms);
   const largeStarRarity = largeStarRarityFromUniforms(bakeUniforms);
   const supportAngle = maxStarSupportAngle({ bakeUniforms, currentCameraInfo });
@@ -201,7 +250,7 @@ export function createStarGeometryForDescriptor({
     : Math.min(1, supportAngle / (2 * Math.PI * sinPhi) + STAR_QUERY_EDGE_PAD_CELLS / grid.columns);
   const uMin = descriptor.storageUvMin.x - uMargin;
   const uMax = descriptor.storageUvMin.x + descriptor.storageUvSize.x + uMargin;
-  const arrays = {
+  const arrays: StarInstanceArrays = {
     directions: [],
     uvs: [],
     randoms: [],
@@ -237,10 +286,16 @@ export function createStarGeometryForDescriptor({
   return geometry;
 }
 
-export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEnabled }) {
+export function createCatalogOverlayAndStats({
+  bakeUniforms,
+  brightStarOverlayEnabled,
+}: {
+  bakeUniforms: StarUniforms;
+  brightStarOverlayEnabled: boolean;
+}): CatalogOverlayResult & { overlayGeometry: THREE.InstancedBufferGeometry } {
   const grid = currentStarGrid(bakeUniforms);
   const largeStarRarity = largeStarRarityFromUniforms(bakeUniforms);
-  const overlayStars = [];
+  const overlayStars: CatalogStar[] = [];
   const classStats = emptyStarClassStats();
 
   for (let row = 0; row < grid.rows; row += 1) {
@@ -272,10 +327,10 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
     return a.cellId.localeCompare(b.cellId);
   });
 
-  const overlayDirections = [];
-  const overlayRandoms = [];
-  const overlaySizeGates = [];
-  const overlayClasses = [];
+  const overlayDirections: number[] = [];
+  const overlayRandoms: number[] = [];
+  const overlaySizeGates: number[] = [];
+  const overlayClasses: number[] = [];
   overlayStars.forEach((star) => {
     overlayDirections.push(star.x, star.y, star.z);
     overlayRandoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
@@ -303,6 +358,7 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
 
   return {
     classStats: finalizedClassStats,
+    geometry: nextOverlayGeometry,
     overlayGeometry: nextOverlayGeometry,
     overlayStars,
   };

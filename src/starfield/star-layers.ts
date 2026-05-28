@@ -4,18 +4,39 @@ import {
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
   DEFAULT_WINKLE_AMOUNT,
   WINKLE_MAX_COUNT,
-} from "./constants.js";
+} from "./constants";
 import {
   createCatalogOverlayAndStats,
   createEmptyOverlayGeometry,
   EMPTY_STAR_POSITIONS,
-} from "./catalog.js";
+} from "./catalog";
 import {
   createOverlayMaterial,
   createWinkleMaterial,
-} from "./shaders.js";
+} from "./shaders";
+import type {
+  CatalogStar,
+  OverlayUniforms,
+  RequestRender,
+  StarfieldStats,
+  UniformMap,
+} from "./types";
 
-function createWinkleGeometry(stars = []) {
+interface StarLayerManagerArgs {
+  scene: THREE.Scene;
+  overlayUniforms: OverlayUniforms;
+  requestRender: RequestRender;
+  overlayRadius?: number;
+}
+
+interface RuntimeStarLayer {
+  id: string;
+  geometry: THREE.InstancedBufferGeometry;
+  material: THREE.ShaderMaterial;
+  mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+}
+
+function createWinkleGeometry(stars: CatalogStar[] = []): THREE.InstancedBufferGeometry {
   const geometry = new THREE.InstancedBufferGeometry();
   const count = Math.min(WINKLE_MAX_COUNT, stars.length);
   const directions = new Float32Array(count * 3);
@@ -54,11 +75,11 @@ export function createStarLayerManager({
   overlayUniforms,
   requestRender,
   overlayRadius = DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
-}) {
-  const layers = new Map();
+}: StarLayerManagerArgs) {
+  const layers = new Map<string, RuntimeStarLayer>();
   let currentOverlayRadius = Number.isFinite(overlayRadius) ? overlayRadius : DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS;
   let brightOverlayEnabled = false;
-  let brightOverlayStats = {
+  let brightOverlayStats: StarfieldStats = {
     overlayEnabled: false,
     overlayStarCount: 0,
     overlayStarInstances: 0,
@@ -70,7 +91,7 @@ export function createStarLayerManager({
     0,
     1,
   );
-  let winkleStats = {
+  let winkleStats: StarfieldStats = {
     winkleAmount: currentWinkleAmount,
     winkleMaxCount: WINKLE_MAX_COUNT,
     winkleActiveCount: 0,
@@ -78,7 +99,7 @@ export function createStarLayerManager({
     winkleTriangles: 0,
   };
 
-  const brightOverlayUniforms = {
+  const brightOverlayUniforms: UniformMap = {
     uRadius: { value: currentOverlayRadius },
     uScreenPixelAngle: overlayUniforms.uScreenPixelAngle,
     uReferenceHeight: overlayUniforms.uReferenceHeight,
@@ -98,20 +119,24 @@ export function createStarLayerManager({
     uEffectMaxSize: overlayUniforms.uEffectMaxSize,
     uOverlayStrength: { value: BRIGHT_STAR_OVERLAY_STRENGTH },
   };
-  const brightOverlay = {
+  const brightOverlayGeometry = createEmptyOverlayGeometry();
+  const brightOverlayMaterial = createOverlayMaterial(brightOverlayUniforms);
+  const brightOverlay: RuntimeStarLayer = {
     id: "brightOverlay",
-    geometry: createEmptyOverlayGeometry(),
-    material: createOverlayMaterial(brightOverlayUniforms),
-    mesh: null,
+    geometry: brightOverlayGeometry,
+    material: brightOverlayMaterial,
+    mesh: new THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>(
+      brightOverlayGeometry,
+      brightOverlayMaterial,
+    ),
   };
-  brightOverlay.mesh = new THREE.Mesh(brightOverlay.geometry, brightOverlay.material);
   brightOverlay.mesh.frustumCulled = false;
   brightOverlay.mesh.renderOrder = 20;
   brightOverlay.mesh.visible = false;
   scene.add(brightOverlay.mesh);
   layers.set(brightOverlay.id, brightOverlay);
 
-  const winkleUniforms = {
+  const winkleUniforms: UniformMap = {
     uRadius: { value: currentOverlayRadius },
     uScreenPixelAngle: overlayUniforms.uScreenPixelAngle,
     uStarSize: overlayUniforms.uStarSize,
@@ -130,13 +155,17 @@ export function createStarLayerManager({
     uTime: { value: 0 },
     uWinkleAmount: overlayUniforms.uWinkleAmount ?? { value: currentWinkleAmount },
   };
-  const winkleOverlay = {
+  const winkleOverlayGeometry = createWinkleGeometry();
+  const winkleOverlayMaterial = createWinkleMaterial(winkleUniforms);
+  const winkleOverlay: RuntimeStarLayer = {
     id: "winkleOverlay",
-    geometry: createWinkleGeometry(),
-    material: createWinkleMaterial(winkleUniforms),
-    mesh: null,
+    geometry: winkleOverlayGeometry,
+    material: winkleOverlayMaterial,
+    mesh: new THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>(
+      winkleOverlayGeometry,
+      winkleOverlayMaterial,
+    ),
   };
-  winkleOverlay.mesh = new THREE.Mesh(winkleOverlay.geometry, winkleOverlay.material);
   winkleOverlay.mesh.frustumCulled = false;
   winkleOverlay.mesh.renderOrder = 21;
   winkleOverlay.mesh.visible = false;
@@ -182,19 +211,25 @@ export function createStarLayerManager({
     };
   }
 
-  function replaceBrightOverlayGeometry(nextGeometry) {
+  function replaceBrightOverlayGeometry(nextGeometry: THREE.InstancedBufferGeometry): void {
     brightOverlay.mesh.geometry = nextGeometry;
     brightOverlay.geometry.dispose();
     brightOverlay.geometry = nextGeometry;
   }
 
-  function replaceWinkleGeometry(nextGeometry) {
+  function replaceWinkleGeometry(nextGeometry: THREE.InstancedBufferGeometry): void {
     winkleOverlay.mesh.geometry = nextGeometry;
     winkleOverlay.geometry.dispose();
     winkleOverlay.geometry = nextGeometry;
   }
 
-  function rebuild({ overlayUniforms: nextOverlayUniforms = overlayUniforms, enabled = brightOverlayEnabled } = {}) {
+  function rebuild({
+    overlayUniforms: nextOverlayUniforms = overlayUniforms,
+    enabled = brightOverlayEnabled,
+  }: {
+    overlayUniforms?: OverlayUniforms;
+    enabled?: boolean;
+  } = {}) {
     brightOverlayEnabled = Boolean(enabled);
     const { overlayGeometry, overlayStars, classStats } = createCatalogOverlayAndStats({
       bakeUniforms: nextOverlayUniforms,
@@ -218,20 +253,20 @@ export function createStarLayerManager({
     };
   }
 
-  function setEnabled(enabled) {
+  function setEnabled(enabled: boolean): void {
     brightOverlayEnabled = Boolean(enabled);
     syncBrightOverlayVisibility();
     syncWinkleVisibility();
     requestRender();
   }
 
-  function setLayerEnabled(layerId, enabled) {
+  function setLayerEnabled(layerId: string, enabled: boolean): void {
     if (layerId === "brightOverlay") {
       setEnabled(enabled);
     }
   }
 
-  function setLayerRadius(layerId, value) {
+  function setLayerRadius(layerId: string, value: number): void {
     const nextValue = Number(value);
     if (!Number.isFinite(nextValue) || nextValue <= 0) return;
 
@@ -245,21 +280,21 @@ export function createStarLayerManager({
     }
   }
 
-  function setSphereSegments(value) {
+  function setSphereSegments(value: number): void {
     void value;
   }
 
-  function refreshBackgroundStats() {
+  function refreshBackgroundStats(): void {
   }
 
-  function setWinkleAmount(value) {
+  function setWinkleAmount(value: number): void {
     currentWinkleAmount = THREE.MathUtils.clamp(Number(value) || 0, 0, 1);
     winkleUniforms.uWinkleAmount.value = currentWinkleAmount;
     syncWinkleVisibility();
     requestRender();
   }
 
-  function advanceRuntime() {
+  function advanceRuntime(): boolean {
     const flashiness = overlayUniforms.uWinkleFlashiness?.value ?? 0;
     const effectsActive = brightOverlayEnabled && currentWinkleAmount > 0 && (winkleOverlay.mesh.visible || flashiness > 0);
     if (!effectsActive) return false;
@@ -269,7 +304,7 @@ export function createStarLayerManager({
     return true;
   }
 
-  function collectStats() {
+  function collectStats(): StarfieldStats {
     return {
       ...brightOverlayStats,
       ...winkleStats,

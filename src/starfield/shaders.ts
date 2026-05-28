@@ -11,7 +11,15 @@ import {
   STAR_SIZE_MIN_SCALE,
   STAR_SIZE_RARITY_EXPONENT,
   SUBPIXEL_DENSITY_THRESHOLD_PX,
-} from "./constants.js";
+} from "./constants";
+import type {
+  BackgroundUniforms,
+  BakeUniforms,
+  DownsampleUniforms,
+  PatchDescriptor,
+  UniformMap,
+  VisiblePatchTarget,
+} from "./types";
 
 const STAR_VERTEX_SHADER = /* glsl */ `
   attribute vec3 iDirection;
@@ -1058,7 +1066,7 @@ const BACKGROUND_PATCH_DOME_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
-export function createStarMaterial(uniforms) {
+export function createStarMaterial(uniforms: BakeUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
@@ -1070,7 +1078,7 @@ export function createStarMaterial(uniforms) {
   });
 }
 
-export function createOverlayMaterial(uniforms) {
+export function createOverlayMaterial(uniforms: UniformMap): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
@@ -1083,7 +1091,7 @@ export function createOverlayMaterial(uniforms) {
   });
 }
 
-export function createWinkleMaterial(uniforms) {
+export function createWinkleMaterial(uniforms: UniformMap): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
@@ -1096,7 +1104,7 @@ export function createWinkleMaterial(uniforms) {
   });
 }
 
-export function createDownsampleMaterial(uniforms) {
+export function createDownsampleMaterial(uniforms: DownsampleUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms,
     depthTest: false,
@@ -1106,7 +1114,7 @@ export function createDownsampleMaterial(uniforms) {
   });
 }
 
-export function createLightCompositionBakeMaterial(uniforms) {
+export function createLightCompositionBakeMaterial(uniforms: BackgroundUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms,
     depthWrite: false,
@@ -1116,7 +1124,13 @@ export function createLightCompositionBakeMaterial(uniforms) {
   });
 }
 
-export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
+export function createPatchDomeMaterial({
+  descriptor,
+  visibleTarget,
+}: {
+  descriptor: PatchDescriptor;
+  visibleTarget: VisiblePatchTarget;
+}): THREE.ShaderMaterial {
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
     innerScale: descriptor.innerScale,
@@ -1150,7 +1164,13 @@ export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
   });
 }
 
-export function createBackgroundPatchDomeMaterial({ descriptor, visibleTarget }) {
+export function createBackgroundPatchDomeMaterial({
+  descriptor,
+  visibleTarget,
+}: {
+  descriptor: PatchDescriptor;
+  visibleTarget: VisiblePatchTarget;
+}): THREE.ShaderMaterial {
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
     innerScale: descriptor.innerScale,

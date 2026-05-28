@@ -1,13 +1,121 @@
-const PARAMS = [
+import type { GpuStarfieldApi, GpuStarfieldParams, StarfieldStats } from "./starfield/types";
+
+const GPU_FIELD_LAYER_ID = "gpuField";
+
+type ControlValue = number | boolean;
+type RangeFormatFn = (value: number) => string;
+type ToggleFormatFn = (value: boolean) => string;
+type ControlLayerId = "skyBackground" | "bakedStars" | "brightOverlay" | typeof GPU_FIELD_LAYER_ID;
+type StarfieldControlLayerId = Exclude<ControlLayerId, typeof GPU_FIELD_LAYER_ID>;
+
+interface PanelGroupParam {
+  group: string;
+}
+
+interface DisplayRangeParam {
+  kind: "display";
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  format: RangeFormatFn;
+}
+
+interface LayerTabsParam {
+  kind: "layerTabs";
+}
+
+type PanelParam = PanelGroupParam | DisplayRangeParam | LayerTabsParam;
+
+interface LayerGroupControl {
+  type: "group";
+  label: string;
+}
+
+interface LayerToggleControl {
+  type: "toggle";
+  key: string;
+  label: string;
+  format: ToggleFormatFn;
+}
+
+interface LayerRangeControl {
+  type: "range";
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  format: RangeFormatFn;
+  param?: boolean;
+}
+
+type LayerControl = LayerGroupControl | LayerToggleControl | LayerRangeControl;
+
+interface LayerTabConfig {
+  id: ControlLayerId;
+  label: string;
+  controls: LayerControl[];
+}
+
+interface LayerToggleState {
+  input: HTMLInputElement;
+  value: HTMLElement;
+  format: ToggleFormatFn;
+}
+
+interface LayerParamState {
+  input: HTMLInputElement;
+  value: HTMLElement;
+  format: RangeFormatFn;
+  min: number;
+  max: number;
+}
+
+interface StarfieldControlApi {
+  defaults: Record<string, unknown>;
+  setSphereSegments(value: number): void;
+  setLayerRadius(layerId: StarfieldControlLayerId, value: number): void;
+  getLayerEnabled(layerId: StarfieldControlLayerId): boolean;
+  setLayerEnabled(layerId: StarfieldControlLayerId, enabled: boolean): void;
+  getLayerParam(layerId: StarfieldControlLayerId, key: string): ControlValue;
+  setLayerParam(layerId: StarfieldControlLayerId, key: string, value: number, delay?: number): void;
+  reseedLayer(layerId: StarfieldControlLayerId): void;
+  bakeNow(): void;
+  setBakeStatusHandler(handler: (label: string, disabled?: boolean) => void): void;
+  setReadoutsChangeHandler(handler: () => void): void;
+}
+
+interface ControlButtons {
+  bake: HTMLButtonElement;
+  seed: HTMLButtonElement;
+  recenter: HTMLButtonElement;
+  overlay?: HTMLButtonElement | null;
+}
+
+interface CreateControlsArgs {
+  rows: HTMLElement;
+  buttons: ControlButtons;
+  starfield: StarfieldControlApi;
+  gpuStarfield: GpuStarfieldApi;
+  getStats: (options?: { detail?: "panel" | "debug" }) => StarfieldStats;
+  onRecenter: () => void;
+}
+
+interface StatsGroup {
+  title: string;
+  lines: string[];
+}
+
+const PARAMS: PanelParam[] = [
   { group: "Display" },
   { key: "sphereSegments", label: "Sphere Segments", min: 16, max: 256, step: 16, format: (v) => v.toFixed(0), kind: "display" },
   { group: "Layers" },
   { kind: "layerTabs" },
 ];
 
-const GPU_FIELD_LAYER_ID = "gpuField";
-
-const STAR_LAYER_CONTROLS = [
+const STAR_LAYER_CONTROLS: LayerControl[] = [
   { type: "group", label: "Field" },
   { type: "range", key: "uDensity", label: "Density", min: 10, max: 1000, step: 1, format: (v) => v.toFixed(0), param: true },
   { type: "range", key: "uSeed", label: "Seed", min: 0, max: 1000, step: 1, format: (v) => v.toFixed(0), param: true },
@@ -25,7 +133,7 @@ const STAR_LAYER_CONTROLS = [
   { type: "range", key: "uColorVar", label: "Color Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
 ];
 
-const LAYER_TABS = [
+const LAYER_TABS: LayerTabConfig[] = [
   {
     id: "skyBackground",
     label: "Background",
@@ -95,33 +203,36 @@ const LAYER_TABS = [
 
 const STATS_PANEL_REFRESH_MS = 250;
 
-function updateSliderFill(input, min, max) {
+function updateSliderFill(input: HTMLInputElement, min: number, max: number): void {
   const value = Number(input.value);
   input.style.setProperty("--fill", `${((value - min) / (max - min)) * 100}%`);
 }
 
-function formatNumber(value, digits = 1) {
-  if (!Number.isFinite(value)) return "0";
-  return value.toFixed(digits);
+function formatNumber(value: unknown, digits = 1): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0";
+  return numeric.toFixed(digits);
 }
 
-function formatInteger(value) {
-  if (!Number.isFinite(value)) return "0";
-  return String(Math.round(value));
+function formatInteger(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0";
+  return String(Math.round(numeric));
 }
 
-function formatPercent(value) {
-  if (!Number.isFinite(value)) return "0.0%";
-  return `${(value * 100).toFixed(1)}%`;
+function formatPercent(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0.0%";
+  return `${(numeric * 100).toFixed(1)}%`;
 }
 
-function formatSizeWithOptimal(value, optimal, capped) {
+function formatSizeWithOptimal(value: unknown, optimal: unknown, capped: unknown): string {
   const label = value ?? "0x0";
-  if (!capped || !optimal) return label;
+  if (!capped || !optimal) return String(label);
   return `${label} (optimal ${optimal})`;
 }
 
-function formatGpuStatsForPanel(stats) {
+function formatGpuStatsForPanel(stats: StarfieldStats): string {
   return [
     "GPU Stats",
     `Memory: ${stats.estimatedTextureMemory}`,
@@ -330,7 +441,7 @@ function formatGpuStatsForPanel(stats) {
   ].join("\n");
 }
 
-export function createControls({ rows, buttons, starfield, gpuStarfield, getStats, onRecenter }) {
+export function createControls({ rows, buttons, starfield, gpuStarfield, getStats, onRecenter }: CreateControlsArgs) {
   const gpuStatsPanel = document.createElement("div");
   gpuStatsPanel.id = "gpu-stats";
   gpuStatsPanel.setAttribute("aria-live", "polite");
@@ -340,20 +451,20 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
   let uxVisible = true;
   let statsRefreshTimer = 0;
   let lastStatsRefreshAt = 0;
-  const collapsedStatsGroups = new Set();
-  const layerToggleInputs = new Map();
-  const layerParamInputs = new Map();
-  let activeLayerId = "bakedStars";
+  const collapsedStatsGroups = new Set<string>();
+  const layerToggleInputs = new Map<string, LayerToggleState>();
+  const layerParamInputs = new Map<string, LayerParamState>();
+  let activeLayerId: ControlLayerId = "bakedStars";
 
-  function isGpuFieldLayer(layer) {
+  function isGpuFieldLayer(layer: string): layer is typeof GPU_FIELD_LAYER_ID {
     return layer === GPU_FIELD_LAYER_ID;
   }
 
-  function getLayerEnabled(layer) {
+  function getLayerEnabled(layer: ControlLayerId): boolean {
     return isGpuFieldLayer(layer) ? gpuStarfield.getEnabled() : starfield.getLayerEnabled(layer);
   }
 
-  function setLayerEnabled(layer, enabled) {
+  function setLayerEnabled(layer: ControlLayerId, enabled: boolean): void {
     if (isGpuFieldLayer(layer)) {
       gpuStarfield.setEnabled(enabled);
       return;
@@ -361,27 +472,28 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     starfield.setLayerEnabled(layer, enabled);
   }
 
-  function getLayerParam(layer, key) {
-    return isGpuFieldLayer(layer) ? gpuStarfield.getParam(key) : starfield.getLayerParam(layer, key);
+  function getLayerParam(layer: ControlLayerId, key: string): ControlValue {
+    return isGpuFieldLayer(layer) ? gpuStarfield.getParam(key as keyof GpuStarfieldParams) : starfield.getLayerParam(layer, key);
   }
 
-  function setLayerParam(layer, key, value, delay) {
+  function setLayerParam(layer: ControlLayerId, key: string, value: number, delay?: number): void {
     if (isGpuFieldLayer(layer)) {
-      gpuStarfield.setParam(key, value);
+      gpuStarfield.setParam(key as keyof GpuStarfieldParams, value);
       return;
     }
     starfield.setLayerParam(layer, key, value, delay);
   }
 
-  function getLayerDefault(layer, key) {
-    return isGpuFieldLayer(layer) ? gpuStarfield.defaults[key] : starfield.defaults[key];
+  function getLayerDefault(layer: ControlLayerId, key: string): ControlValue {
+    const value = isGpuFieldLayer(layer) ? gpuStarfield.defaults[key as keyof GpuStarfieldParams] : starfield.defaults[key];
+    return typeof value === "number" || typeof value === "boolean" ? value : 0;
   }
 
-  function isUxVisible() {
+  function isUxVisible(): boolean {
     return uxVisible;
   }
 
-  function setUxVisible(nextVisible) {
+  function setUxVisible(nextVisible: boolean): void {
     uxVisible = nextVisible;
     document.body.classList.toggle("is-ux-hidden", !uxVisible);
 
@@ -396,7 +508,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     }
   }
 
-  function collectStatsForPanel(options = {}) {
+  function collectStatsForPanel(options: { detail?: "panel" | "debug" } = {}): StarfieldStats {
     updatingStatsPanel = true;
     try {
       return getStats(options);
@@ -405,7 +517,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     }
   }
 
-  function scheduleNextStatsPanelRefresh() {
+  function scheduleNextStatsPanelRefresh(): void {
     if (statsRefreshTimer || !isUxVisible() || !gpuStatsPanel.classList.contains("is-visible")) return;
     statsRefreshTimer = window.setTimeout(() => {
       statsRefreshTimer = 0;
@@ -413,7 +525,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     }, STATS_PANEL_REFRESH_MS);
   }
 
-  function refreshVisibleStatsPanel({ force = false } = {}) {
+  function refreshVisibleStatsPanel({ force = false }: { force?: boolean } = {}): void {
     if (updatingStatsPanel || !isUxVisible()) return;
     if (!force && !gpuStatsPanel.classList.contains("is-visible")) return;
     const now = performance.now();
@@ -434,17 +546,17 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     scheduleNextStatsPanelRefresh();
   }
 
-  function setBakeStatus(label, disabled = false) {
+  function setBakeStatus(label: string, disabled = false): void {
     buttons.bake.textContent = label;
     buttons.bake.disabled = disabled;
   }
 
-  function setOverlayButtonState(enabled) {
+  function setOverlayButtonState(enabled: boolean): void {
     if (!buttons.overlay) return;
     buttons.overlay.setAttribute("aria-pressed", enabled ? "true" : "false");
   }
 
-  function syncLayerToggle(layer) {
+  function syncLayerToggle(layer: ControlLayerId): void {
     const control = layerToggleInputs.get(layer);
     if (!control) return;
     const enabled = getLayerEnabled(layer);
@@ -452,20 +564,20 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     control.value.textContent = control.format(enabled);
   }
 
-  function syncLayerParam(layer, key) {
+  function syncLayerParam(layer: ControlLayerId, key: string): void {
     const control = layerParamInputs.get(`${layer}:${key}`);
     if (!control) return;
     const nextValue = getLayerParam(layer, key);
     control.input.value = String(nextValue);
-    control.value.textContent = control.format(nextValue);
+    control.value.textContent = control.format(Number(nextValue));
     updateSliderFill(control.input, control.min, control.max);
   }
 
-  function syncSeedButtonState() {
+  function syncSeedButtonState(): void {
     buttons.seed.disabled = activeLayerId === "skyBackground" || activeLayerId === GPU_FIELD_LAYER_ID;
   }
 
-  function toggleOverlay() {
+  function toggleOverlay(): void {
     const nextEnabled = !starfield.getLayerEnabled("brightOverlay");
     starfield.setLayerEnabled("brightOverlay", nextEnabled);
     setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
@@ -473,11 +585,11 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     refreshVisibleStatsPanel({ force: true });
   }
 
-  function refreshReadouts() {
+  function refreshReadouts(): void {
     refreshVisibleStatsPanel();
   }
 
-  function addRangeRow(param) {
+  function addRangeRow(param: DisplayRangeParam): void {
     const row = document.createElement("div");
     row.className = "row";
 
@@ -497,7 +609,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     input.step = String(param.step);
     input.value = String(starfield.defaults[param.key]);
 
-    function paint(nextValue) {
+    function paint(nextValue: number): void {
       value.textContent = param.format(nextValue);
       updateSliderFill(input, param.min, param.max);
     }
@@ -516,7 +628,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     paint(Number(input.value));
   }
 
-  function addLayerToggleRow(parent, layer, control) {
+  function addLayerToggleRow(parent: HTMLElement, layer: ControlLayerId, control: LayerToggleControl): void {
     const row = document.createElement("div");
     row.className = "row row--toggle";
 
@@ -542,7 +654,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     const track = document.createElement("span");
     track.className = "switch-track";
 
-    function paint(nextValue) {
+    function paint(nextValue: boolean): void {
       value.textContent = control.format(nextValue);
     }
 
@@ -567,7 +679,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     paint(input.checked);
   }
 
-  function addLayerRangeRow(parent, layer, control) {
+  function addLayerRangeRow(parent: HTMLElement, layer: ControlLayerId, control: LayerRangeControl): void {
     const row = document.createElement("div");
     row.className = "row";
 
@@ -598,7 +710,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
       });
     }
 
-    function paint(nextValue) {
+    function paint(nextValue: number): void {
       value.textContent = control.format(nextValue);
       updateSliderFill(input, control.min, control.max);
     }
@@ -611,7 +723,9 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
         refreshVisibleStatsPanel();
         return;
       }
-      starfield.setLayerRadius(layer, nextValue);
+      if (!isGpuFieldLayer(layer)) {
+        starfield.setLayerRadius(layer, nextValue);
+      }
       refreshVisibleStatsPanel();
     });
 
@@ -621,7 +735,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     paint(Number(input.value));
   }
 
-  function addLayerTabs() {
+  function addLayerTabs(): void {
     const row = document.createElement("div");
     row.className = "row row--layer-tabs";
 
@@ -633,16 +747,18 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     const panels = document.createElement("div");
     panels.className = "layer-tab-panels";
 
-    function activate(layerId) {
+    function activate(layerId: ControlLayerId): void {
       activeLayerId = layerId;
-      [...tablist.children].forEach((tab) => {
+      Array.from(tablist.children).forEach((tabElement) => {
+        const tab = tabElement as HTMLElement;
         const selected = tab.dataset.layer === layerId;
         tab.classList.toggle("is-active", selected);
         tab.setAttribute("aria-selected", selected ? "true" : "false");
         tab.tabIndex = selected ? 0 : -1;
       });
 
-      [...panels.children].forEach((panel) => {
+      Array.from(panels.children).forEach((panelElement) => {
+        const panel = panelElement as HTMLElement;
         panel.hidden = panel.dataset.layer !== layerId;
       });
       syncSeedButtonState();
@@ -693,9 +809,9 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     rows.append(row);
   }
 
-  function buildPanel() {
+  function buildPanel(): void {
     PARAMS.forEach((param) => {
-      if (param.group) {
+      if ("group" in param) {
         const group = document.createElement("div");
         group.className = "group";
         group.textContent = param.group;
@@ -712,9 +828,9 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     });
   }
 
-  function createStatsGroups(stats) {
-    const groups = [];
-    let currentGroup = null;
+  function createStatsGroups(stats: StarfieldStats): StatsGroup[] {
+    const groups: StatsGroup[] = [];
+    let currentGroup: StatsGroup | null = null;
 
     formatGpuStatsForPanel(stats)
       .split("\n")
@@ -736,7 +852,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     return groups;
   }
 
-  function renderGpuStatsGroups(stats) {
+  function renderGpuStatsGroups(stats: StarfieldStats): void {
     const fragment = document.createDocumentFragment();
     const groups = createStatsGroups(stats);
 
@@ -769,18 +885,18 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     gpuStatsPanel.replaceChildren(fragment);
   }
 
-  function showGpuStatsPanel(stats) {
+  function showGpuStatsPanel(stats: StarfieldStats): void {
     renderGpuStatsGroups(stats);
     gpuStatsPanel.classList.add("is-visible");
   }
 
-  function hideGpuStatsPanel() {
+  function hideGpuStatsPanel(): void {
     clearTimeout(statsRefreshTimer);
     statsRefreshTimer = 0;
     gpuStatsPanel.classList.remove("is-visible");
   }
 
-  function printGpuStats() {
+  function printGpuStats(): void {
     setUxVisible(true);
     const stats = collectStatsForPanel({ detail: "debug" });
     window.lastStarfieldGpuStats = stats;
@@ -790,11 +906,11 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     console.groupEnd();
   }
 
-  function toggleUxVisibility() {
+  function toggleUxVisibility(): void {
     setUxVisible(!uxVisible);
   }
 
-  function handleUxHotkey(event) {
+  function handleUxHotkey(event: KeyboardEvent): void {
     if (event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
     event.preventDefault();
     toggleUxVisibility();
@@ -815,7 +931,8 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
   window.printStarfieldGpuStats = printGpuStats;
 
   buildPanel();
-  ["skyBackground", "bakedStars", GPU_FIELD_LAYER_ID, "brightOverlay"].forEach(syncLayerToggle);
+  const layerIds: ControlLayerId[] = ["skyBackground", "bakedStars", GPU_FIELD_LAYER_ID, "brightOverlay"];
+  layerIds.forEach(syncLayerToggle);
   setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
   syncSeedButtonState();
 

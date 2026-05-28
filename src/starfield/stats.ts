@@ -23,17 +23,90 @@ import {
   DEFAULT_WINKLE_FLASHINESS,
   sizeLabel,
   sphereVerticalSegmentsFor,
-} from "./constants.js";
+} from "./constants";
 import {
   maxDescriptorPrecisionSize,
   maxDescriptorStorageSize,
   patchGridLabel,
-} from "./patch-layout.js";
+} from "./patch-layout";
 import {
   catalogStarCount,
   currentStarGrid,
   overlayCandidateStarCount,
-} from "./catalog.js";
+} from "./catalog";
+import type {
+  BakeUniforms,
+  CameraInfo,
+  OverlayUniforms,
+  PatchDescriptor,
+  PatchLayout,
+  QueueState,
+  StarfieldStats,
+} from "./types";
+
+interface InitialStatsDefaults {
+  skyBackgroundRadius: number;
+  bakedStarsRadius: number;
+  brightOverlayRadius: number;
+  uDensity: number;
+  uSeed: number;
+  uWinkleAmount?: number;
+  uEffectMinSize?: number;
+  uEffectMaxSize?: number;
+  uWinkleSharpness?: number;
+  uWinkleFlashiness?: number;
+  backgroundParams?: {
+    uSeed?: number;
+    uCoverage?: number;
+    uDensity?: number;
+    uBaseScale?: number;
+    uOpacity?: number;
+    uNebulaStrength?: number;
+    uNebulaExposure?: number;
+    uLightIntensity?: number;
+  };
+}
+
+interface InitialStatsArgs {
+  defaults: InitialStatsDefaults;
+  defaultPatchLayout: PatchLayout;
+  supersample: number;
+  maxTextureSize: number;
+  accumulationTypeLabel: string;
+  currentSphereSegments: number;
+}
+
+interface StatsTargetManager {
+  activePatchTargets: Set<unknown>;
+  allocationCount: number;
+  activePatchTargetBytes(): number;
+  pooledTargetBytes(): number;
+  pooledTargets(): unknown[];
+  pooledTargetsByBucket(): Record<string, number>;
+  targetBucketSummary(counts: Record<string, number>): string;
+}
+
+interface StatsContext {
+  currentCameraInfo: CameraInfo;
+  currentPatchLayout: PatchLayout;
+  currentSupersample: number;
+  patchDescriptors: PatchDescriptor[];
+  maxTextureSize: number;
+  accumulationType: THREE.TextureDataType;
+  accumulationTypeLabel: string;
+  bakeUniforms: BakeUniforms;
+  overlayUniforms?: OverlayUniforms;
+  catalogDirty: boolean;
+  overlayCatalogDirty?: boolean;
+  stats: StarfieldStats;
+  targetManager: StatsTargetManager;
+  allocationBudgetBytes?: number;
+  residentLayerCount?: number;
+  bakeScratchBytes?: number;
+  queueState: QueueState;
+  activeBlendCount: number;
+  syncOverlayStats(): void;
+}
 
 export function createInitialStats({
   defaults,
@@ -42,7 +115,7 @@ export function createInitialStats({
   maxTextureSize,
   accumulationTypeLabel,
   currentSphereSegments,
-}) {
+}: InitialStatsArgs): StarfieldStats {
   return {
     mode: "baked-equirect-skydome-tiled-catalog-splat",
     bakes: 0,
@@ -136,7 +209,7 @@ export function createInitialStats({
   };
 }
 
-export function computeDemandReadouts(ctx) {
+export function computeDemandReadouts(ctx: StatsContext) {
   const {
     currentCameraInfo,
     currentPatchLayout,
@@ -241,7 +314,7 @@ export function computeDemandReadouts(ctx) {
   };
 }
 
-export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) {
+export function computeMemoryReadouts(ctx: StatsContext, demand = computeDemandReadouts(ctx)) {
   const {
     currentPatchLayout,
     currentSupersample,
@@ -303,27 +376,27 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
   };
 }
 
-function autoVirtualSizeForDescriptors(layout, descriptors) {
+function autoVirtualSizeForDescriptors(layout: PatchLayout, descriptors: PatchDescriptor[]): string {
   const targetWidth = descriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.targetSize.width), 1);
   const targetHeight = descriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.targetSize.height), 1);
   return sizeLabel(targetWidth * layout.columns, targetHeight * layout.rows);
 }
 
-function maxDescriptorTargetSize(descriptors) {
+function maxDescriptorTargetSize(descriptors: PatchDescriptor[]) {
   return descriptors.reduce((size, descriptor) => ({
     width: Math.max(size.width, descriptor.targetSize?.width ?? 1),
     height: Math.max(size.height, descriptor.targetSize?.height ?? 1),
   }), { width: 1, height: 1 });
 }
 
-function maxDescriptorAssignedSize(descriptors) {
+function maxDescriptorAssignedSize(descriptors: PatchDescriptor[]) {
   return descriptors.reduce((size, descriptor) => ({
     width: Math.max(size.width, descriptor.assignedSize?.width ?? descriptor.targetSize.width),
     height: Math.max(size.height, descriptor.assignedSize?.height ?? descriptor.targetSize.height),
   }), { width: 1, height: 1 });
 }
 
-function sizeIsCapped(actual, optimal) {
+function sizeIsCapped(actual: { width: number; height: number }, optimal: { width: number; height: number }): boolean {
   return Math.round(actual.width) < Math.round(optimal.width)
     || Math.round(actual.height) < Math.round(optimal.height);
 }
@@ -333,6 +406,11 @@ function computeCapReadouts({
   currentSupersample,
   demand,
   patchDescriptors,
+}: {
+  currentPatchLayout: PatchLayout;
+  currentSupersample: number;
+  demand: ReturnType<typeof computeDemandReadouts>;
+  patchDescriptors: PatchDescriptor[];
 }) {
   const targetSize = maxDescriptorTargetSize(patchDescriptors);
   const assignedSize = maxDescriptorAssignedSize(patchDescriptors);
@@ -370,7 +448,7 @@ function computeCapReadouts({
   };
 }
 
-export function updatePatchDescriptorDemand(ctx, demand) {
+export function updatePatchDescriptorDemand(ctx: StatsContext, demand: ReturnType<typeof computeDemandReadouts>): void {
   const {
     patchDescriptors,
   } = ctx;
@@ -419,7 +497,7 @@ export function updatePatchDescriptorDemand(ctx, demand) {
   });
 }
 
-export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
+export function patchDescriptorSummary(ctx: StatsContext, { includeDebug = false }: { includeDebug?: boolean } = {}): StarfieldStats {
   const {
     patchDescriptors,
     stats,
@@ -428,8 +506,8 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
     activeBlendCount,
     catalogDirty,
   } = ctx;
-  const states = {};
-  const allocationStates = {};
+  const states: Record<string, number> = {};
+  const allocationStates: Record<string, number> = {};
   const requiredBuckets = patchDescriptors.map((descriptor) => descriptor.requiredBucket);
   const targetBuckets = patchDescriptors.map((descriptor) => descriptor.targetBucket);
   const brightStarPressures = patchDescriptors.map((descriptor) => descriptor.brightStarPressure);
@@ -442,16 +520,16 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
     allocationStates[descriptor.allocationState] = (allocationStates[descriptor.allocationState] ?? 0) + 1;
   });
 
-  const formatCounts = (counts) => Object.entries(counts)
+  const formatCounts = (counts: Record<string, number>) => Object.entries(counts)
     .map(([key, value]) => `${key}:${value}`)
     .join(", ");
-  const formatRange = (values) => {
+  const formatRange = (values: number[]) => {
     if (values.length === 0) return "none";
     const min = Math.min(...values);
     const max = Math.max(...values);
     return min === max ? String(Math.round(min)) : `${Math.round(min)}-${Math.round(max)}`;
   };
-  const summary = {
+  const summary: StarfieldStats = {
     patchDescriptorCount: patchDescriptors.length,
     descriptorCount: patchDescriptors.length,
     residentPatchCount: patchDescriptors.filter((descriptor) => descriptor.state === PATCH_STATES.RESIDENT).length,
@@ -545,7 +623,13 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
   return summary;
 }
 
-export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail = "panel" } = {}) {
+export function collectStatsPayload(
+  ctx: StatsContext,
+  rendererInfo: THREE.WebGLInfo,
+  cameraInfo: Partial<CameraInfo> = {},
+  { detail = "panel" }: { detail?: "panel" | "debug" } = {},
+): StarfieldStats {
+  void cameraInfo;
   const {
     currentPatchLayout,
     currentSupersample,
@@ -570,7 +654,7 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail
   const storageSize = maxDescriptorStorageSize(patchDescriptors);
   const assignedSize = maxDescriptorAssignedSize(patchDescriptors);
   const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
-  const result = {
+  const result: StarfieldStats = {
     ...stats,
     ...demand,
     ...memory,
@@ -613,7 +697,7 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail
   return result;
 }
 
-export function updatePatchStats(ctx) {
+export function updatePatchStats(ctx: StatsContext): void {
   const {
     currentPatchLayout,
     currentSupersample,
@@ -659,7 +743,7 @@ export function updatePatchStats(ctx) {
   stats.starQueryGrid = `${currentStarGrid(bakeUniforms).columns}x${currentStarGrid(bakeUniforms).rows}`;
 }
 
-export function updateSphereSegmentStats(stats, currentSphereSegments) {
+export function updateSphereSegmentStats(stats: StarfieldStats, currentSphereSegments: number): void {
   stats.sphereSegments = currentSphereSegments;
   stats.sphereVerticalSegments = sphereVerticalSegmentsFor(currentSphereSegments);
 }

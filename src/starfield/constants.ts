@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { CameraInfo, FieldGradient, StarClassStats } from "./types";
 
 export const DOME_RADIUS = 10;
 export const REFERENCE_BAKE_WIDTH = 4096;
@@ -55,7 +56,7 @@ export const DEFAULT_LIGHT_COMPOSITION_BACKGROUND = Object.freeze({
   uCloudHighlight: [0.3, 0.36, 0.72],
   uCloudCore: [0.025, 0.03, 0.07],
 });
-export const DEFAULT_FIELD_GRADIENT = Object.freeze({
+export const DEFAULT_FIELD_GRADIENT: Readonly<FieldGradient> = Object.freeze({
   type: "gradient",
   mode: "field",
   blend: "gaussian",
@@ -63,16 +64,16 @@ export const DEFAULT_FIELD_GRADIENT = Object.freeze({
   power: 2,
   warp: { amp: DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uColorWarpAmp, freq: DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uColorWarpFreq },
   anchors: [
-    { dir: [0.26, 0.18, 0.95], color: [0.14, 0.19, 0.46] },
-    { dir: [-0.72, 0.34, 0.6], color: [0.18, 0.08, 0.22] },
-    { dir: [0.62, -0.46, -0.64], color: [0.05, 0.12, 0.28] },
-    { dir: [-0.18, -0.82, -0.54], color: [0.13, 0.15, 0.2] },
+    { dir: [0.26, 0.18, 0.95] as [number, number, number], color: [0.14, 0.19, 0.46] as [number, number, number] },
+    { dir: [-0.72, 0.34, 0.6] as [number, number, number], color: [0.18, 0.08, 0.22] as [number, number, number] },
+    { dir: [0.62, -0.46, -0.64] as [number, number, number], color: [0.05, 0.12, 0.28] as [number, number, number] },
+    { dir: [-0.18, -0.82, -0.54] as [number, number, number], color: [0.13, 0.15, 0.2] as [number, number, number] },
   ],
 });
 export const MAX_BAKE_JOBS_PER_FRAME = 1;
 export const CAMERA_BAKE_IDLE_MS = 450;
 export const PATCH_CROSSFADE_MS = 260;
-export const CATALOG_PARAMS = new Set(["uDensity", "uSeed"]);
+export const CATALOG_PARAMS = new Set<string>(["uDensity", "uSeed"]);
 export const DENSITY_FALLBACK_STARS_PER_PIXEL = 0.25;
 export const BRIGHT_STAR_FRACTION = 0.1;
 export const AUTO_PATCH_GRIDS = [1, 2, 4, 8, 16];
@@ -109,58 +110,58 @@ export const FALLBACK_STATES = Object.freeze({
   RESIDENT: "resident",
 });
 
-export function sphereVerticalSegmentsFor(horizontalSegments) {
+export function sphereVerticalSegmentsFor(horizontalSegments: number): number {
   return Math.max(8, Math.floor(horizontalSegments / 2));
 }
 
-export function sizeLabel(width, height) {
+export function sizeLabel(width: number, height: number = width): string {
   return `${Math.round(width)}x${Math.round(height)}`;
 }
 
-export function formatBytes(bytes) {
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-export function estimateTextureBytes(width, height, bytesPerPixel) {
+export function estimateTextureBytes(width: number, height: number, bytesPerPixel: number): number {
   return width * height * bytesPerPixel;
 }
 
-export function clamp(value, min, max) {
+export function clamp(value: number, min: number, max: number): number {
   const numeric = Number.isFinite(value) ? value : min;
   return Math.min(max, Math.max(min, numeric));
 }
 
-export function catalogSeed(value) {
+export function catalogSeed(value: number): number {
   const scaled = Math.floor(value * 1000003);
   return (scaled ^ 0x9e3779b9) >>> 0;
 }
 
-export function mixUint32(value) {
+export function mixUint32(value: number): number {
   let state = value >>> 0;
   state = Math.imul(state ^ (state >>> 16), 0x7feb352d);
   state = Math.imul(state ^ (state >>> 15), 0x846ca68b);
   return (state ^ (state >>> 16)) >>> 0;
 }
 
-export function hashCellUnit(seed, column, row, salt) {
+export function hashCellUnit(seed: number, column: number, row: number, salt: number): number {
   const x = Math.imul((column + 0x9e3779b9) >>> 0, 0x85ebca6b);
   const y = Math.imul((row + 0xc2b2ae35) >>> 0, 0x27d4eb2f);
   const s = Math.imul((salt + 0x165667b1) >>> 0, 0x9e3779b1);
   return mixUint32((seed ^ x ^ y ^ s) >>> 0) / 4294967296;
 }
 
-export function wrapIndex(index, size) {
+export function wrapIndex(index: number, size: number): number {
   return ((index % size) + size) % size;
 }
 
-export function qFromV(v) {
+export function qFromV(v: number): number {
   const clampedV = clamp(v, 0, 1);
   return (1 - Math.cos(clampedV * Math.PI)) * 0.5;
 }
 
-export function equirectDirectionFromUv(u, v) {
+export function equirectDirectionFromUv(u: number, v: number): THREE.Vector3 {
   const theta = (u - 0.5) * Math.PI * 2;
   const phi = v * Math.PI;
   const sinPhi = Math.sin(phi);
@@ -171,7 +172,7 @@ export function equirectDirectionFromUv(u, v) {
   ).normalize();
 }
 
-export function emptyStarClassStats() {
+export function emptyStarClassStats(): StarClassStats {
   return {
     starClassTotal: 0,
     tinyStarCount: 0,
@@ -196,13 +197,19 @@ export function emptyStarClassStats() {
   };
 }
 
-function starSizeRank(rSize, rSizeGate = 1, largeStarRarity = 0) {
+function starSizeRank(rSize: number, rSizeGate = 1, largeStarRarity = 0): number {
   const baseRank = Math.pow(clamp(rSize, 0, 1), STAR_SIZE_RARITY_EXPONENT);
   const gate = 1 + (Math.pow(clamp(rSizeGate, 0, 1), STAR_SIZE_GATE_EXPONENT) - 1) * clamp(largeStarRarity, 0, 1);
   return baseRank * gate;
 }
 
-export function visualImportanceForStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare) {
+export function visualImportanceForStar(
+  rSize: number,
+  rSizeGate: number,
+  largeStarRarity: number,
+  rBright: number,
+  rGlare: number,
+): number {
   const sizeScore = starSizeRank(rSize, rSizeGate, largeStarRarity);
   const linkedBrightRand = rBright + (Math.max(rBright, sizeScore) - rBright) * STAR_SIZE_BRIGHTNESS_LINK;
   const linkedGlareRand = rGlare + (Math.max(rGlare, sizeScore) - rGlare) * STAR_SIZE_GLARE_LINK;
@@ -211,7 +218,13 @@ export function visualImportanceForStar(rSize, rSizeGate, largeStarRarity, rBrig
   return clamp(sizeScore * 0.3 + brightScore * 0.55 + glareScore * 0.15, 0, 1);
 }
 
-export function classifyStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare) {
+export function classifyStar(
+  rSize: number,
+  rSizeGate: number,
+  largeStarRarity: number,
+  rBright: number,
+  rGlare: number,
+): number {
   const sizeScore = starSizeRank(rSize, rSizeGate, largeStarRarity);
   const linkedBrightRand = rBright + (Math.max(rBright, sizeScore) - rBright) * STAR_SIZE_BRIGHTNESS_LINK;
   const linkedGlareRand = rGlare + (Math.max(rGlare, sizeScore) - rGlare) * STAR_SIZE_GLARE_LINK;
@@ -231,7 +244,7 @@ export function classifyStar(rSize, rSizeGate, largeStarRarity, rBright, rGlare)
   return STAR_CLASSES.NORMAL;
 }
 
-export function recordStarClass(classStats, classId) {
+export function recordStarClass(classStats: StarClassStats, classId: number): void {
   classStats.starClassTotal += 1;
   if (classId === STAR_CLASSES.TINY) {
     classStats.tinyStarCount += 1;
@@ -252,7 +265,7 @@ export function recordStarClass(classStats, classId) {
   classStats.bakedCandidateStarCount += 1;
 }
 
-export function finalizeStarClassStats(classStats) {
+export function finalizeStarClassStats(classStats: StarClassStats): StarClassStats {
   classStats.bakedCandidateStarCount += classStats.brightStarClassCount + classStats.heroStarCount;
   classStats.starClassSummary = STAR_CLASS_NAMES
     .map((name, classId) => {
@@ -265,7 +278,7 @@ export function finalizeStarClassStats(classStats) {
   return classStats;
 }
 
-export function screenPixelAngleFromInfo(cameraInfo) {
+export function screenPixelAngleFromInfo(cameraInfo: Pick<CameraInfo, "verticalFov" | "screenHeight">): number {
   const verticalFov = Number(cameraInfo.verticalFov) || 0;
   const screenHeight = Math.max(1, Number(cameraInfo.screenHeight) || 1);
   if (verticalFov <= 0) return Math.PI / REFERENCE_BAKE_HEIGHT;

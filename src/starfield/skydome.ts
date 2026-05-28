@@ -6,8 +6,33 @@ import {
   PATCH_CROSSFADE_MS,
   clamp,
   sphereVerticalSegmentsFor,
-} from "./constants.js";
-import { createPatchDomeMaterial } from "./shaders.js";
+} from "./constants";
+import { createPatchDomeMaterial } from "./shaders";
+import type {
+  PatchDescriptor,
+  PatchRenderTarget,
+  RequestRender,
+  Size2,
+  VisiblePatchTarget,
+} from "./types";
+
+interface SkydomeManagerArgs {
+  scene: THREE.Scene;
+  requestRender: RequestRender;
+  targetManager: {
+    releaseTarget(target: PatchRenderTarget): void;
+  };
+  fallbackPatchTarget: VisiblePatchTarget;
+  getSphereSegments: () => number;
+  initialRadius?: number;
+  createMaterial?: (args: { descriptor: PatchDescriptor; visibleTarget: VisiblePatchTarget }) => THREE.ShaderMaterial;
+  geometryUvRangeForDescriptor?: (descriptor: PatchDescriptor) => {
+    uvMin: THREE.Vector2;
+    uvSize: THREE.Vector2;
+  };
+  renderOrder?: number;
+  onBlendStatsChange?: (activeBlendCount: number) => void;
+}
 
 export function createSkydomeManager({
   scene,
@@ -23,13 +48,13 @@ export function createSkydomeManager({
   }),
   renderOrder = 0,
   onBlendStatsChange = () => {},
-}) {
+}: SkydomeManagerArgs) {
   const bakedDomeGroup = new THREE.Group();
-  const activePatchBlends = new Set();
+  const activePatchBlends = new Set<PatchDescriptor>();
   let domeRadius = Number.isFinite(initialRadius) ? initialRadius : DOME_RADIUS;
   scene.add(bakedDomeGroup);
 
-  function createDomeGeometry(descriptor) {
+  function createDomeGeometry(descriptor: PatchDescriptor): THREE.SphereGeometry {
     const sphereSegments = getSphereSegments();
     const sphereVerticalSegments = sphereVerticalSegmentsFor(sphereSegments);
     const geometryUvRange = geometryUvRangeForDescriptor(descriptor);
@@ -56,11 +81,11 @@ export function createSkydomeManager({
     );
   }
 
-  function visibleTargetForDescriptor(descriptor) {
+  function visibleTargetForDescriptor(descriptor: PatchDescriptor): VisiblePatchTarget {
     return descriptor.currentTarget ?? descriptor.target ?? fallbackPatchTarget;
   }
 
-  function samplingForTarget(target, descriptor) {
+  function samplingForTarget(target: VisiblePatchTarget, descriptor: PatchDescriptor) {
     return target?.starfieldSampling ?? {
       innerOffset: descriptor.innerOffset,
       innerScale: descriptor.innerScale,
@@ -69,7 +94,7 @@ export function createSkydomeManager({
     };
   }
 
-  function createPatchDomeMesh(descriptor) {
+  function createPatchDomeMesh(descriptor: PatchDescriptor): THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial> {
     const geometry = createDomeGeometry(descriptor);
     const material = createMaterial({
       descriptor,
@@ -84,7 +109,12 @@ export function createSkydomeManager({
     return mesh;
   }
 
-  function setDescriptorMaterialTextures(descriptor, currentTarget, nextTarget = currentTarget, blend = 0) {
+  function setDescriptorMaterialTextures(
+    descriptor: PatchDescriptor,
+    currentTarget: VisiblePatchTarget | null,
+    nextTarget: VisiblePatchTarget | null = currentTarget,
+    blend = 0,
+  ): void {
     if (!descriptor.material || !currentTarget) return;
     const currentSampling = samplingForTarget(currentTarget, descriptor);
     const nextSampling = samplingForTarget(nextTarget ?? currentTarget, descriptor);
@@ -103,11 +133,11 @@ export function createSkydomeManager({
     descriptor.material.uniforms.uBlend.value = blend;
   }
 
-  function syncBlendStats() {
+  function syncBlendStats(): void {
     onBlendStatsChange(activePatchBlends.size);
   }
 
-  function bindDescriptorMaterialTarget(descriptor, target) {
+  function bindDescriptorMaterialTarget(descriptor: PatchDescriptor, target: PatchRenderTarget | null): void {
     if (!target) return;
     descriptor.currentTarget = target;
     descriptor.target = target;
@@ -121,7 +151,7 @@ export function createSkydomeManager({
     syncBlendStats();
   }
 
-  function finishDescriptorBlend(descriptor) {
+  function finishDescriptorBlend(descriptor: PatchDescriptor): void {
     const previousTarget = descriptor.blendFromTarget;
     const nextTarget = descriptor.blendToTarget ?? descriptor.nextTarget;
 
@@ -152,7 +182,11 @@ export function createSkydomeManager({
     }
   }
 
-  function startDescriptorBlend(descriptor, previousTarget, nextTarget) {
+  function startDescriptorBlend(
+    descriptor: PatchDescriptor,
+    previousTarget: PatchRenderTarget,
+    nextTarget: PatchRenderTarget,
+  ): void {
     descriptor.currentTarget = previousTarget;
     descriptor.target = previousTarget;
     descriptor.nextTarget = nextTarget;
@@ -170,7 +204,7 @@ export function createSkydomeManager({
     requestRender();
   }
 
-  function promoteDescriptorBakeTarget(descriptor, bakedTarget) {
+  function promoteDescriptorBakeTarget(descriptor: PatchDescriptor, bakedTarget: PatchRenderTarget): void {
     const previousTarget = descriptor.currentTarget;
 
     if (!previousTarget || previousTarget === bakedTarget) {
@@ -183,28 +217,29 @@ export function createSkydomeManager({
     startDescriptorBlend(descriptor, previousTarget, bakedTarget);
   }
 
-  function disposeBakedDomeMeshes() {
+  function disposeBakedDomeMeshes(): void {
     while (bakedDomeGroup.children.length > 0) {
       const child = bakedDomeGroup.children[0];
       bakedDomeGroup.remove(child);
-      child.geometry.dispose();
-      child.material.dispose();
+      const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+      mesh.geometry.dispose();
+      mesh.material.dispose();
     }
   }
 
-  function rebuildBakedDomeMeshes(descriptors) {
+  function rebuildBakedDomeMeshes(descriptors: PatchDescriptor[]): void {
     disposeBakedDomeMeshes();
     descriptors.forEach((descriptor) => {
       bakedDomeGroup.add(createPatchDomeMesh(descriptor));
     });
   }
 
-  function setVisible(visible) {
+  function setVisible(visible: boolean): void {
     bakedDomeGroup.visible = Boolean(visible);
     requestRender();
   }
 
-  function setRadius(value, descriptors = []) {
+  function setRadius(value: number, descriptors: PatchDescriptor[] = []): void {
     const nextRadius = Number(value);
     if (!Number.isFinite(nextRadius) || nextRadius <= 0) return;
     domeRadius = nextRadius;
@@ -212,7 +247,7 @@ export function createSkydomeManager({
     requestRender();
   }
 
-  function clearBlendForDescriptor(descriptor) {
+  function clearBlendForDescriptor(descriptor: PatchDescriptor): void {
     activePatchBlends.delete(descriptor);
     descriptor.blendActive = false;
     descriptor.blendProgress = 0;
@@ -223,7 +258,7 @@ export function createSkydomeManager({
     syncBlendStats();
   }
 
-  function advancePatchBlends() {
+  function advancePatchBlends(): boolean {
     if (activePatchBlends.size === 0) return false;
 
     const now = performance.now();
@@ -250,7 +285,7 @@ export function createSkydomeManager({
     return activePatchBlends.size > 0;
   }
 
-  function dispose() {
+  function dispose(): void {
     disposeBakedDomeMeshes();
     scene.remove(bakedDomeGroup);
     activePatchBlends.clear();

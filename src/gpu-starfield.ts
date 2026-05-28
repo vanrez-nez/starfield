@@ -1,4 +1,11 @@
 import * as THREE from "three";
+import type {
+  CameraInfo,
+  GpuStarfieldApi,
+  GpuStarfieldParams,
+  RequestRender,
+  StarfieldStats,
+} from "./starfield/types";
 
 const BASE_QUAD_POSITIONS = new Float32Array([
   -1, -1, 0,
@@ -9,7 +16,7 @@ const BASE_QUAD_POSITIONS = new Float32Array([
   -1, 1, 0,
 ]);
 
-const DEFAULTS = Object.freeze({
+const DEFAULTS: GpuStarfieldParams = Object.freeze({
   enabled: true,
   starCount: 6144,
   fieldRadius: 14,
@@ -115,23 +122,23 @@ const FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
-function mixUint32(value) {
+function mixUint32(value: number): number {
   let state = value >>> 0;
   state = Math.imul(state ^ (state >>> 16), 0x7feb352d);
   state = Math.imul(state ^ (state >>> 15), 0x846ca68b);
   return (state ^ (state >>> 16)) >>> 0;
 }
 
-function randomUnit(index, salt) {
+function randomUnit(index: number, salt: number): number {
   return mixUint32((Math.imul(index + 1, 0x9e3779b1) ^ Math.imul(salt + 17, 0x85ebca6b)) >>> 0) / 4294967296;
 }
 
-function wrapPositive(value, span) {
+function wrapPositive(value: number, span: number): number {
   if (span <= 0) return 0;
   return ((value % span) + span) % span;
 }
 
-function screenPixelAngleFromInfo(cameraInfo = {}) {
+function screenPixelAngleFromInfo(cameraInfo: Partial<CameraInfo> = {}): number {
   const screenWidth = Math.max(1, Number(cameraInfo.screenWidth) || 1);
   const screenHeight = Math.max(1, Number(cameraInfo.screenHeight) || 1);
   const horizontalFov = THREE.MathUtils.degToRad(Number(cameraInfo.horizontalFov) || 60);
@@ -139,7 +146,7 @@ function screenPixelAngleFromInfo(cameraInfo = {}) {
   return Math.max(horizontalFov / screenWidth, verticalFov / screenHeight);
 }
 
-function forwardFromInfo(cameraInfo = {}) {
+function forwardFromInfo(cameraInfo: Partial<CameraInfo> = {}): THREE.Vector3 {
   const x = Number(cameraInfo.forwardX ?? cameraInfo.forward?.x ?? 0);
   const y = Number(cameraInfo.forwardY ?? cameraInfo.forward?.y ?? 0);
   const z = Number(cameraInfo.forwardZ ?? cameraInfo.forward?.z ?? -1);
@@ -147,7 +154,7 @@ function forwardFromInfo(cameraInfo = {}) {
   return new THREE.Vector3(x / length, y / length, z / length);
 }
 
-function createGeometry(starCount) {
+function createGeometry(starCount: number): THREE.InstancedBufferGeometry {
   const count = Math.max(0, Math.round(starCount));
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(BASE_QUAD_POSITIONS, 3));
@@ -181,8 +188,14 @@ function createGeometry(starCount) {
   return geometry;
 }
 
-export function createGpuStarfield({ scene, requestRender = () => {} }) {
-  const params = { ...DEFAULTS };
+export function createGpuStarfield({
+  scene,
+  requestRender = () => {},
+}: {
+  scene: THREE.Scene;
+  requestRender?: RequestRender;
+}): GpuStarfieldApi {
+  const params: GpuStarfieldParams = { ...DEFAULTS };
   const virtualPosition = new THREE.Vector3();
   let cameraForward = new THREE.Vector3(0, 0, -1);
   let geometryRebuilds = 0;
@@ -216,7 +229,7 @@ export function createGpuStarfield({ scene, requestRender = () => {} }) {
   mesh.visible = params.enabled;
   scene.add(mesh);
 
-  function rebuildGeometry(nextCount) {
+  function rebuildGeometry(nextCount: number): void {
     const nextGeometry = createGeometry(nextCount);
     mesh.geometry = nextGeometry;
     geometry.dispose();
@@ -224,14 +237,13 @@ export function createGpuStarfield({ scene, requestRender = () => {} }) {
     geometryRebuilds += 1;
   }
 
-  function setEnabled(enabled) {
+  function setEnabled(enabled: boolean): void {
     params.enabled = Boolean(enabled);
     mesh.visible = params.enabled && params.starCount > 0;
     requestRender();
   }
 
-  function setParam(key, value) {
-    if (!(key in params)) return;
+  function setParam(key: keyof GpuStarfieldParams, value: number | boolean): void {
     const nextValue = Number(value);
     if (!Number.isFinite(nextValue)) return;
 
@@ -250,7 +262,8 @@ export function createGpuStarfield({ scene, requestRender = () => {} }) {
       return;
     }
 
-    params[key] = nextValue;
+    const numericKey = key as Exclude<keyof GpuStarfieldParams, "enabled" | "starCount">;
+    params[numericKey] = nextValue;
     if (key === "fieldRadius") {
       uniforms.uFieldRadius.value = Math.max(0.001, nextValue);
       const span = uniforms.uFieldRadius.value * 2;
@@ -271,16 +284,24 @@ export function createGpuStarfield({ scene, requestRender = () => {} }) {
     requestRender();
   }
 
-  function getParam(key) {
+  function getParam(key: keyof GpuStarfieldParams): number | boolean {
     return params[key] ?? 0;
   }
 
-  function setCameraInfo(cameraInfo = {}) {
+  function setCameraInfo(cameraInfo: Partial<CameraInfo> = {}): void {
     uniforms.uScreenPixelAngle.value = screenPixelAngleFromInfo(cameraInfo);
     cameraForward = forwardFromInfo(cameraInfo);
   }
 
-  function recordRender({ delta = 0, elapsedTime = 0, cameraInfo = null } = {}) {
+  function recordRender({
+    delta = 0,
+    elapsedTime = 0,
+    cameraInfo = undefined,
+  }: {
+    delta?: number;
+    elapsedTime?: number;
+    cameraInfo?: Partial<CameraInfo>;
+  } = {}): void {
     if (cameraInfo) {
       cameraForward = forwardFromInfo(cameraInfo);
     }
@@ -297,7 +318,7 @@ export function createGpuStarfield({ scene, requestRender = () => {} }) {
     );
   }
 
-  function collectStats() {
+  function collectStats(): StarfieldStats {
     const visible = mesh.visible && params.starCount > 0;
     return {
       gpuFieldEnabled: params.enabled,
@@ -315,7 +336,7 @@ export function createGpuStarfield({ scene, requestRender = () => {} }) {
     };
   }
 
-  function dispose() {
+  function dispose(): void {
     scene.remove(mesh);
     geometry.dispose();
     material.dispose();

@@ -25,28 +25,28 @@ import {
   estimateTextureBytes,
   screenPixelAngleFromInfo,
   sizeLabel,
-} from "./starfield/constants.js";
+} from "./starfield/constants";
 import {
   assignDescriptorStorage,
   createAutoPatchLayout,
   createPatchDescriptors as createPatchDescriptorList,
   maxDescriptorPrecisionSize,
   patchGridLabel,
-} from "./starfield/patch-layout.js";
+} from "./starfield/patch-layout";
 import {
   catalogStarCount,
   createEmptyStarGeometry,
   createStarGeometryForDescriptor,
-} from "./starfield/catalog.js";
-import { createRenderTargetManager } from "./starfield/render-targets.js";
+} from "./starfield/catalog";
+import { createRenderTargetManager } from "./starfield/render-targets";
 import {
   createBackgroundPatchDomeMaterial,
   createDownsampleMaterial,
   createLightCompositionBakeMaterial,
   createStarMaterial,
-} from "./starfield/shaders.js";
-import { createSkydomeManager } from "./starfield/skydome.js";
-import { createStarLayerManager } from "./starfield/star-layers.js";
+} from "./starfield/shaders";
+import { createSkydomeManager } from "./starfield/skydome";
+import { createStarLayerManager } from "./starfield/star-layers";
 import {
   collectStatsPayload,
   computeDemandReadouts as computeDemandReadoutsFromStats,
@@ -56,32 +56,78 @@ import {
   updatePatchDescriptorDemand as updatePatchDescriptorDemandFromStats,
   updatePatchStats as updatePatchStatsFromStats,
   updateSphereSegmentStats,
-} from "./starfield/stats.js";
-import { createBakePipeline } from "./starfield/bake-pipeline.js";
-import { createBackgroundBakePipeline } from "./starfield/background-bake-pipeline.js";
+} from "./starfield/stats";
+import { createBakePipeline } from "./starfield/bake-pipeline";
+import { createBackgroundBakePipeline } from "./starfield/background-bake-pipeline";
+import type {
+  BackgroundParams,
+  BackgroundUniforms,
+  BakeUniforms,
+  CameraInfo,
+  DownsampleUniforms,
+  FieldGradient,
+  LayerId,
+  OverlayUniforms,
+  PatchDescriptor,
+  PatchLayout,
+  PatchRenderTarget,
+  PatchTextureTarget,
+  RequestRender,
+  ScreenBakeSignature,
+  StarLayerParams,
+  StarfieldStats,
+  UniformMap,
+} from "./starfield/types";
 
-function vectorFromArray(value, fallback = [0, 0, 0]) {
-  const source = Array.isArray(value) && value.length >= 3 ? value : fallback;
-  return new THREE.Vector3(source[0], source[1], source[2]);
+type BakePipeline = ReturnType<typeof createBakePipeline>;
+type BackgroundBakePipeline = ReturnType<typeof createBackgroundBakePipeline>;
+type DemandReadouts = ReturnType<typeof computeDemandReadoutsFromStats>;
+
+interface CreateStarfieldArgs {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  requestRender: RequestRender;
 }
 
-function normalizedVectorFromArray(value, fallback = [0, 0, 1]) {
+interface PendingDisplaySwap {
+  previousDescriptors: PatchDescriptor[];
+}
+
+interface LayerStateEntry<P extends Record<string, unknown>, U extends UniformMap = UniformMap> {
+  enabled: boolean;
+  radius: number;
+  params: P;
+  uniforms?: U;
+}
+
+interface StarfieldLayerState {
+  skyBackground: LayerStateEntry<BackgroundParams, BackgroundUniforms>;
+  bakedStars: LayerStateEntry<StarLayerParams, BakeUniforms>;
+  brightOverlay: LayerStateEntry<StarLayerParams, OverlayUniforms>;
+}
+
+function vectorFromArray(value: unknown, fallback: [number, number, number] = [0, 0, 0]): THREE.Vector3 {
+  const source = Array.isArray(value) && value.length >= 3 ? value : fallback;
+  return new THREE.Vector3(Number(source[0]) || 0, Number(source[1]) || 0, Number(source[2]) || 0);
+}
+
+function normalizedVectorFromArray(value: unknown, fallback: [number, number, number] = [0, 0, 1]): THREE.Vector3 {
   const vector = vectorFromArray(value, fallback);
   if (vector.lengthSq() < 1e-8) return vectorFromArray(fallback).normalize();
   return vector.normalize();
 }
 
-function applyFieldGradientToUniforms(uniforms, gradient = DEFAULT_FIELD_GRADIENT) {
+function applyFieldGradientToUniforms(uniforms: BackgroundUniforms, gradient: Readonly<FieldGradient> = DEFAULT_FIELD_GRADIENT): void {
   const anchors = Array.isArray(gradient.anchors) ? gradient.anchors.slice(0, LIGHT_COMPOSITION_MAX_ANCHORS) : [];
   uniforms.uAnchorCount.value = anchors.length;
   uniforms.uBlend.value = gradient.blend === "gaussian" ? 1 : 0;
-  uniforms.uPower.value = Number.isFinite(gradient.power) ? gradient.power : 2;
-  uniforms.uSigma.value = Number.isFinite(gradient.sigma) ? gradient.sigma : 0.34;
+  uniforms.uPower.value = typeof gradient.power === "number" && Number.isFinite(gradient.power) ? gradient.power : 2;
+  uniforms.uSigma.value = typeof gradient.sigma === "number" && Number.isFinite(gradient.sigma) ? gradient.sigma : 0.34;
   uniforms.uColorWarpAmp.value = Number.isFinite(gradient.warp?.amp)
-    ? gradient.warp.amp
+    ? gradient.warp?.amp ?? uniforms.uColorWarpAmp.value
     : uniforms.uColorWarpAmp.value;
   uniforms.uColorWarpFreq.value = Number.isFinite(gradient.warp?.freq)
-    ? gradient.warp.freq
+    ? gradient.warp?.freq ?? uniforms.uColorWarpFreq.value
     : uniforms.uColorWarpFreq.value;
 
   for (let index = 0; index < LIGHT_COMPOSITION_MAX_ANCHORS; index += 1) {
@@ -91,7 +137,10 @@ function applyFieldGradientToUniforms(uniforms, gradient = DEFAULT_FIELD_GRADIEN
   }
 }
 
-function createLightCompositionUniforms(params, gradient = DEFAULT_FIELD_GRADIENT) {
+function createLightCompositionUniforms(
+  params: BackgroundParams,
+  gradient: Readonly<FieldGradient> = DEFAULT_FIELD_GRADIENT,
+): BackgroundUniforms {
   const uniforms = {
     uTileUvMin: { value: new THREE.Vector2(0, 0) },
     uTileUvSize: { value: new THREE.Vector2(1, 1) },
@@ -125,7 +174,7 @@ function createLightCompositionUniforms(params, gradient = DEFAULT_FIELD_GRADIEN
   return uniforms;
 }
 
-export function createStarfield({ renderer, scene, requestRender }) {
+export function createStarfield({ renderer, scene, requestRender }: CreateStarfieldArgs) {
   const targetManager = createRenderTargetManager({ renderer });
   const maxTextureSize = targetManager.maxTextureSize;
   const accumulationType = targetManager.accumulationType;
@@ -133,17 +182,17 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   const starScene = new THREE.Scene();
   const bakeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  let pipeline;
-  let bakeStatusHandler = () => {};
-  let readoutsChangeHandler = () => {};
+  let pipeline: BakePipeline;
+  let bakeStatusHandler: (label: string, disabled?: boolean) => void = () => {};
+  let readoutsChangeHandler: (readouts?: unknown) => void = () => {};
   let brightStarOverlayEnabled = BRIGHT_STAR_OVERLAY_ENABLED;
   let catalogDirty = true;
   let overlayCatalogDirty = true;
   let autoLayoutTimer = 0;
   let pendingAutoLayoutKey = "";
-  let pendingDisplaySwap = null;
+  let pendingDisplaySwap: PendingDisplaySwap | null = null;
   let layoutInitialized = false;
-  let currentCameraInfo = {
+  let currentCameraInfo: CameraInfo = {
     horizontalFov: 60,
     verticalFov: 60,
     screenWidth: 1,
@@ -162,7 +211,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     accumulationType,
     residentLayerCount: 2,
   });
-  const defaultStarParams = {
+  const defaultStarParams: StarLayerParams = {
     uDensity: 360,
     uStarSize: 5,
     uSizeVar: 0.95,
@@ -175,7 +224,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uColorVar: 1,
     uSeed: 1,
   };
-  const defaultBackgroundParams = {
+  const defaultBackgroundParams: BackgroundParams = {
     ...DEFAULT_LIGHT_COMPOSITION_BACKGROUND,
     uCloudShadow: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudShadow],
     uCloudHighlight: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudHighlight],
@@ -199,7 +248,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   };
 
   let currentSphereSegments = defaults.sphereSegments;
-  const layerState = {
+  const layerState: StarfieldLayerState = {
     skyBackground: {
       enabled: defaults.skyBackgroundEnabled,
       radius: defaults.skyBackgroundRadius,
@@ -239,7 +288,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   window.starfieldStats = stats;
 
   const fallbackPatchTexture = targetManager.createFallbackPatchTexture();
-  const fallbackPatchTarget = { texture: fallbackPatchTexture };
+  const fallbackPatchTarget: PatchTextureTarget = { texture: fallbackPatchTexture };
   const fallbackBackgroundTexture = new THREE.DataTexture(
     new Uint8Array([8, 16, 44, 255]),
     1,
@@ -253,11 +302,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
   fallbackBackgroundTexture.wrapS = THREE.ClampToEdgeWrapping;
   fallbackBackgroundTexture.wrapT = THREE.ClampToEdgeWrapping;
   fallbackBackgroundTexture.needsUpdate = true;
-  const fallbackBackgroundTarget = { texture: fallbackBackgroundTexture };
+  const fallbackBackgroundTarget: PatchTextureTarget = { texture: fallbackBackgroundTexture };
   const screenPixelAngleUniform = { value: Math.PI / REFERENCE_BAKE_HEIGHT };
   const referenceHeightUniform = { value: REFERENCE_BAKE_HEIGHT };
 
-  const bakeUniforms = {
+  const bakeUniforms: BakeUniforms = {
     uBakeSize: { value: new THREE.Vector2(
       defaultPatchLayout.storageWidth * defaultPatchLayout.supersample,
       defaultPatchLayout.storageHeight * defaultPatchLayout.supersample,
@@ -279,7 +328,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uColorVar: { value: layerState.bakedStars.params.uColorVar },
     uSeed: { value: layerState.bakedStars.params.uSeed },
   };
-  const overlayUniforms = {
+  const overlayUniforms: OverlayUniforms = {
     uScreenPixelAngle: screenPixelAngleUniform,
     uReferenceHeight: referenceHeightUniform,
     uDensity: { value: layerState.brightOverlay.params.uDensity },
@@ -293,11 +342,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uGlareVar: { value: layerState.brightOverlay.params.uGlareVar },
     uColorVar: { value: layerState.brightOverlay.params.uColorVar },
     uSeed: { value: layerState.brightOverlay.params.uSeed },
-    uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount },
-    uEffectMinSize: { value: layerState.brightOverlay.params.uEffectMinSize },
-    uEffectMaxSize: { value: layerState.brightOverlay.params.uEffectMaxSize },
-    uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness },
-    uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness },
+    uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount ?? DEFAULT_WINKLE_AMOUNT },
+    uEffectMinSize: { value: layerState.brightOverlay.params.uEffectMinSize ?? DEFAULT_EFFECT_MIN_SIZE },
+    uEffectMaxSize: { value: layerState.brightOverlay.params.uEffectMaxSize ?? DEFAULT_EFFECT_MAX_SIZE },
+    uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness ?? DEFAULT_WINKLE_SHARPNESS },
+    uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness ?? DEFAULT_WINKLE_FLASHINESS },
   };
   const backgroundUniforms = createLightCompositionUniforms(layerState.skyBackground.params, DEFAULT_FIELD_GRADIENT);
   layerState.skyBackground.uniforms = backgroundUniforms;
@@ -324,7 +373,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   });
   starLayers.setEnabled(brightStarOverlayEnabled);
 
-  const downsampleUniforms = {
+  const downsampleUniforms: DownsampleUniforms = {
     uSourceTexture: { value: null },
     uSourceSize: { value: new THREE.Vector2(1, 1) },
     uTargetSize: { value: new THREE.Vector2(1, 1) },
@@ -374,7 +423,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     onBlendStatsChange: () => pipeline?.syncBakeQueueStats(),
   });
   skydome.rebuildBakedDomeMeshes(patchDescriptors);
-  let backgroundPipeline;
+  let backgroundPipeline: BackgroundBakePipeline;
   pipeline = createBakePipeline({
     renderer,
     starScene,
@@ -388,17 +437,17 @@ export function createStarfield({ renderer, scene, requestRender }) {
     getCurrentCameraInfo: () => currentCameraInfo,
     getCurrentPatchLayout: () => currentPatchLayout,
     getCurrentSupersample: () => currentSupersample,
-    setCurrentSupersample: (value) => {
+    setCurrentSupersample: (value: number) => {
       currentSupersample = value;
     },
     getPatchDescriptors: () => patchDescriptors,
     getSupersampleTarget: () => supersampleTarget,
     targetForDescriptor,
     targetMatchesDescriptor,
-    releaseTarget: (target) => targetManager.releaseTarget(target),
+    releaseTarget: (target: PatchRenderTarget) => targetManager.releaseTarget(target),
     descriptorById,
     setStarBakeGeometry,
-    createBakeGeometry: (descriptor) => createStarGeometryForDescriptor({
+    createBakeGeometry: (descriptor: PatchDescriptor) => createStarGeometryForDescriptor({
       descriptor,
       bakeUniforms,
       currentCameraInfo,
@@ -430,9 +479,9 @@ export function createStarfield({ renderer, scene, requestRender }) {
     getPatchDescriptors: () => backgroundPatchDescriptors,
     targetForDescriptor: backgroundTargetForDescriptor,
     targetMatchesDescriptor,
-    releaseTarget: (target) => targetManager.releaseTarget(target),
+    releaseTarget: (target: PatchRenderTarget) => targetManager.releaseTarget(target),
     descriptorById: backgroundDescriptorById,
-    targetBytes: (target) => targetManager.patchTargetBytes(target),
+    targetBytes: (target: PatchRenderTarget) => targetManager.patchTargetBytes(target),
     notifyReadouts,
     requestRender,
     onBakeQueueDrained: () => {
@@ -443,16 +492,16 @@ export function createStarfield({ renderer, scene, requestRender }) {
     },
   });
 
-  function accumulationBytesPerPixel() {
+  function accumulationBytesPerPixel(): number {
     return accumulationType === THREE.HalfFloatType ? 8 : 4;
   }
 
-  function currentBakeScratchBytes() {
+  function currentBakeScratchBytes(): number {
     if (!supersampleTarget || supersampleTarget.width <= 1 || supersampleTarget.height <= 1) return 0;
     return estimateTextureBytes(supersampleTarget.width, supersampleTarget.height, accumulationBytesPerPixel());
   }
 
-  function releaseBakeScratch() {
+  function releaseBakeScratch(): void {
     if (!supersampleTarget || (supersampleTarget.width <= 1 && supersampleTarget.height <= 1)) return;
     supersampleTarget.setSize(1, 1);
   }
@@ -483,20 +532,20 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
-  function setBakeStatus(label, disabled = false) {
+  function setBakeStatus(label: string, disabled = false): void {
     bakeStatusHandler(label, disabled);
   }
 
-  function notifyReadouts() {
+  function notifyReadouts(): void {
     readoutsChangeHandler(getReadouts());
   }
 
-  function roundedNumber(value, digits = 4) {
+  function roundedNumber(value: number, digits = 4): number {
     const factor = 10 ** digits;
     return Math.round((Number(value) || 0) * factor) / factor;
   }
 
-  function screenBakeSignature(cameraInfo = currentCameraInfo) {
+  function screenBakeSignature(cameraInfo: CameraInfo = currentCameraInfo): ScreenBakeSignature {
     const screenWidth = Math.max(1, Math.round(Number(cameraInfo.screenWidth) || 1));
     const screenHeight = Math.max(1, Math.round(Number(cameraInfo.screenHeight) || 1));
     const pixelRatio = roundedNumber(cameraInfo.pixelRatio, 3);
@@ -521,7 +570,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
-  function patchLayoutKey(layout) {
+  function patchLayoutKey(layout: PatchLayout): string {
     return [
       `${layout.columns}x${layout.rows}`,
       `guard:${layout.guard}`,
@@ -530,7 +579,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     ].join("|");
   }
 
-  function computeAutoPatchLayout() {
+  function computeAutoPatchLayout(): PatchLayout {
     return createAutoPatchLayout({
       cameraInfo: currentCameraInfo,
       maxTextureSize,
@@ -539,7 +588,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     });
   }
 
-  function plannedDescriptorContentSize(descriptor) {
+  function plannedDescriptorContentSize(descriptor: PatchDescriptor) {
     const sourceSize = descriptor.targetSize;
     return {
       width: sourceSize.width,
@@ -547,7 +596,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
-  function plannedDescriptorStorageSize(descriptor) {
+  function plannedDescriptorStorageSize(descriptor: PatchDescriptor) {
     const contentSize = plannedDescriptorContentSize(descriptor);
     const assignedWidth = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.width)));
     const assignedHeight = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.height)));
@@ -557,7 +606,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
-  function desiredLayerBakeKey(descriptor, signature = screenBakeSignature()) {
+  function desiredLayerBakeKey(descriptor: PatchDescriptor, signature = screenBakeSignature()): string {
     const storageSize = plannedDescriptorStorageSize(descriptor);
     return [
       descriptor.id,
@@ -567,7 +616,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     ].join("|");
   }
 
-  function applyDescriptorBakeStorage(descriptor) {
+  function applyDescriptorBakeStorage(descriptor: PatchDescriptor): void {
     const contentSize = plannedDescriptorContentSize(descriptor);
     assignDescriptorStorage(
       descriptor,
@@ -578,7 +627,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     );
   }
 
-  function attachTargetSamplingMetadata(descriptor, target) {
+  function attachTargetSamplingMetadata(descriptor: PatchDescriptor, target: PatchRenderTarget): void {
     target.starfieldSampling = {
       innerOffset: descriptor.innerOffset.clone(),
       innerScale: descriptor.innerScale.clone(),
@@ -589,7 +638,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
-  function targetForDescriptor(descriptor, name = "Baked skydome patch") {
+  function targetForDescriptor(descriptor: PatchDescriptor, name = "Baked skydome patch"): PatchRenderTarget {
     applyDescriptorBakeStorage(descriptor);
     const target = targetManager.acquireTarget(descriptor.storageSize.width, descriptor.storageSize.height, {
       name,
@@ -600,7 +649,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return target;
   }
 
-  function backgroundTargetForDescriptor(descriptor, name = "Baked nebula patch") {
+  function backgroundTargetForDescriptor(descriptor: PatchDescriptor, name = "Baked nebula patch"): PatchRenderTarget {
     applyDescriptorBakeStorage(descriptor);
     const target = targetManager.acquireTarget(descriptor.storageSize.width, descriptor.storageSize.height, {
       name,
@@ -611,14 +660,14 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return target;
   }
 
-  function targetMatchesDescriptor(descriptor, target) {
+  function targetMatchesDescriptor(descriptor: PatchDescriptor, target: PatchRenderTarget | null): boolean {
     if (!target) return false;
     const storageSize = plannedDescriptorStorageSize(descriptor);
     return targetManager.renderTargetWidth(target) === storageSize.width
       && targetManager.renderTargetHeight(target) === storageSize.height;
   }
 
-  function recordDescriptorLayerBake(descriptor) {
+  function recordDescriptorLayerBake(descriptor: PatchDescriptor): void {
     const signature = screenBakeSignature();
     descriptor.lastBakedScreenSignature = { ...signature };
     descriptor.lastBakedScreenSignatureKey = signature.key;
@@ -631,7 +680,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     descriptor.layerDirtyReason = "";
   }
 
-  function createPatchDescriptorsWithTargets(layout) {
+  function createPatchDescriptorsWithTargets(layout: PatchLayout): PatchDescriptor[] {
     const descriptors = createPatchDescriptorList(layout, maxTextureSize);
     descriptors.forEach((descriptor) => {
       descriptor.currentTarget = targetForDescriptor(descriptor, `Baked skydome patch ${descriptor.x + 1},${descriptor.y + 1}`);
@@ -642,7 +691,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return descriptors;
   }
 
-  function createBackgroundPatchDescriptors(layout) {
+  function createBackgroundPatchDescriptors(layout: PatchLayout): PatchDescriptor[] {
     const descriptors = createPatchDescriptorList(layout, maxTextureSize);
     descriptors.forEach((descriptor) => {
       descriptor.backgroundDirty = true;
@@ -653,22 +702,22 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return descriptors;
   }
 
-  function descriptorById(patchId) {
-    return patchDescriptors.find((descriptor) => descriptor.id === patchId) ?? null;
+  function descriptorById(patchId: string): PatchDescriptor | undefined {
+    return patchDescriptors.find((descriptor) => descriptor.id === patchId);
   }
 
-  function backgroundDescriptorById(patchId) {
-    return backgroundPatchDescriptors.find((descriptor) => descriptor.id === patchId) ?? null;
+  function backgroundDescriptorById(patchId: string): PatchDescriptor | undefined {
+    return backgroundPatchDescriptors.find((descriptor) => descriptor.id === patchId);
   }
 
-  function descriptorMeshTriangles(descriptor) {
+  function descriptorMeshTriangles(descriptor: PatchDescriptor): number {
     const geometry = descriptor.mesh?.geometry;
     if (!geometry) return 0;
     if (geometry.index) return Math.round(geometry.index.count / 3);
     return Math.round((geometry.attributes.position?.count ?? 0) / 3);
   }
 
-  function syncBackgroundStats() {
+  function syncBackgroundStats(): void {
     backgroundPipeline?.syncStats();
     const visible = layerState.skyBackground.enabled;
     stats.backgroundLayerEnabled = visible;
@@ -687,7 +736,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     stats.backgroundLightIntensity = backgroundUniforms.uLightIntensity.value;
   }
 
-  function syncOverlayStats() {
+  function syncOverlayStats(): void {
     Object.assign(stats, starLayers.collectStats());
     syncBackgroundStats();
     stats.bakedStarLayerEnabled = layerState.bakedStars.enabled;
@@ -707,7 +756,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     stats.overlayCatalogDirty = overlayCatalogDirty;
   }
 
-  function rebuildOverlayCatalog() {
+  function rebuildOverlayCatalog(): void {
     const { classStats } = starLayers.rebuild({
       overlayUniforms,
       enabled: brightStarOverlayEnabled,
@@ -717,14 +766,14 @@ export function createStarfield({ renderer, scene, requestRender }) {
     syncOverlayStats();
   }
 
-  function syncBakedCatalogStats() {
+  function syncBakedCatalogStats(): void {
     catalogDirty = false;
     stats.starCount = catalogStarCount(bakeUniforms);
     stats.starInstances = stats.starCount * STAR_QUERY_SEAM_COPIES;
     syncOverlayStats();
   }
 
-  function markCatalogDirty(layerId = "bakedStars") {
+  function markCatalogDirty(layerId: LayerId = "bakedStars"): void {
     if (layerId === "brightOverlay") {
       overlayCatalogDirty = true;
       return;
@@ -732,7 +781,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     catalogDirty = true;
   }
 
-  function ensureStarCatalog() {
+  function ensureStarCatalog(): void {
     if (overlayCatalogDirty) {
       rebuildOverlayCatalog();
     }
@@ -741,7 +790,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     }
   }
 
-  function setStarBakeGeometry(nextGeometry) {
+  function setStarBakeGeometry(nextGeometry: THREE.InstancedBufferGeometry): void {
     starMesh.geometry = nextGeometry;
     starGeometry.dispose();
     starGeometry = nextGeometry;
@@ -751,11 +800,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return computeDemandReadoutsFromStats(makeStatsContext());
   }
 
-  function computeMemoryReadouts(demand = computeDemandReadouts()) {
+  function computeMemoryReadouts(demand: DemandReadouts = computeDemandReadouts()) {
     return computeMemoryReadoutsFromStats(makeStatsContext(), demand);
   }
 
-  function updatePatchDescriptorDemand(demand) {
+  function updatePatchDescriptorDemand(demand: DemandReadouts): void {
     updatePatchDescriptorDemandFromStats(makeStatsContext(), demand);
   }
 
@@ -763,33 +812,33 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return patchDescriptorSummaryFromStats(makeStatsContext());
   }
 
-  function autoVirtualSizeLabel() {
+  function autoVirtualSizeLabel(): string {
     const targetWidth = patchDescriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.targetSize.width), 1);
     const targetHeight = patchDescriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.targetSize.height), 1);
     return sizeLabel(targetWidth * currentPatchLayout.columns, targetHeight * currentPatchLayout.rows);
   }
 
-  function currentPatchSizeLabel() {
+  function currentPatchSizeLabel(): string {
     const targetWidth = patchDescriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.assignedSize?.width ?? descriptor.targetSize.width), 1);
     const targetHeight = patchDescriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.assignedSize?.height ?? descriptor.targetSize.height), 1);
     return sizeLabel(targetWidth, targetHeight);
   }
 
-  function updateDemandStats() {
+  function updateDemandStats(): void {
     const demand = computeDemandReadouts();
     updatePatchDescriptorDemand(demand);
     currentSupersample = currentPatchLayout.supersample ?? 1;
     Object.assign(stats, demand, computeMemoryReadouts(demand), patchDescriptorSummary());
   }
 
-  function updatePatchStats() {
+  function updatePatchStats(): void {
     updatePatchStatsFromStats(makeStatsContext());
     updateDemandStats();
   }
 
-  function descriptorsNeedingScreenLayerBake() {
+  function descriptorsNeedingScreenLayerBake(): PatchDescriptor[] {
     const signature = screenBakeSignature();
-    const changedDescriptors = [];
+    const changedDescriptors: PatchDescriptor[] = [];
 
     patchDescriptors.forEach((descriptor) => {
       if (descriptor.state !== PATCH_STATES.RESIDENT && descriptor.state !== PATCH_STATES.STALE) return;
@@ -810,7 +859,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return changedDescriptors;
   }
 
-  function scheduleScreenLayerRebakes() {
+  function scheduleScreenLayerRebakes(): void {
     const descriptors = descriptorsNeedingScreenLayerBake();
     if (descriptors.length > 0) {
       pipeline.scheduleLayerBakeJobs(descriptors, "screen");
@@ -819,7 +868,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     backgroundPipeline.scheduleBake(CAMERA_BAKE_IDLE_MS);
   }
 
-  function rebuildDisplayGeometry() {
+  function rebuildDisplayGeometry(): void {
     backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
     skydome.rebuildBakedDomeMeshes(patchDescriptors);
     starLayers.setSphereSegments(currentSphereSegments);
@@ -828,7 +877,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     requestRender();
   }
 
-  function completePendingDisplaySwap() {
+  function completePendingDisplaySwap(): void {
     if (!pendingDisplaySwap) return;
 
     const { previousDescriptors } = pendingDisplaySwap;
@@ -841,7 +890,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     requestRender();
   }
 
-  function applyAutomaticPatchLayout(reason = "automatic", { bake = true } = {}) {
+  function applyAutomaticPatchLayout(reason = "automatic", { bake = true }: { bake?: boolean } = {}): boolean {
     const nextLayout = computeAutoPatchLayout();
     if (!nextLayout || patchLayoutKey(nextLayout) === patchLayoutKey(currentPatchLayout)) {
       stats.autoLayoutReason = nextLayout?.autoLayoutReason ?? reason;
@@ -876,7 +925,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return true;
   }
 
-  function scheduleAutomaticPatchLayout(reason = "screen", delay = 450) {
+  function scheduleAutomaticPatchLayout(reason = "screen", delay = 450): boolean {
     const nextLayout = computeAutoPatchLayout();
     if (!nextLayout) return false;
 
@@ -898,15 +947,24 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return true;
   }
 
-  function disposePatchDescriptors(descriptors, { releaseTargets = true, skydomeManager = skydome } = {}) {
+  function disposePatchDescriptors(
+    descriptors: PatchDescriptor[],
+    {
+      releaseTargets = true,
+      skydomeManager = skydome,
+    }: {
+      releaseTargets?: boolean;
+      skydomeManager?: typeof skydome;
+    } = {},
+  ): void {
     descriptors.forEach((descriptor) => {
-      const targets = new Set([
+      const targets = new Set<PatchRenderTarget>([
         descriptor.currentTarget,
         descriptor.nextTarget,
         descriptor.target,
         descriptor.blendFromTarget,
         descriptor.blendToTarget,
-      ].filter(Boolean));
+      ].filter((target): target is PatchRenderTarget => Boolean(target)));
 
       targets.forEach((target) => {
         if (releaseTargets) {
@@ -924,7 +982,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     });
   }
 
-  function setLayerParamValue(layerId, key, value) {
+  function setLayerParamValue(layerId: LayerId, key: string, value: number): boolean {
     const layer = layerState[layerId];
     if (!layer?.params || !layer?.uniforms?.[key]) return false;
     layer.params[key] = value;
@@ -932,7 +990,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return true;
   }
 
-  function setLayerParam(layerId, key, value, delay = 180) {
+  function setLayerParam(layerId: LayerId, key: string, value: number, delay = 180): void {
     const nextValue = Number(value);
     if (!Number.isFinite(nextValue) || !setLayerParamValue(layerId, key, nextValue)) return;
 
@@ -985,24 +1043,25 @@ export function createStarfield({ renderer, scene, requestRender }) {
     }
   }
 
-  function getLayerParam(layerId, key) {
-    return layerState[layerId]?.params?.[key] ?? 0;
+  function getLayerParam(layerId: LayerId, key: string): number {
+    const value = layerState[layerId]?.params?.[key];
+    return typeof value === "number" ? value : 0;
   }
 
-  function reseedLayer(layerId) {
+  function reseedLayer(layerId: LayerId): number {
     if (!layerState[layerId]?.params) return 0;
     const nextSeed = Math.floor(Math.random() * 1001);
     setLayerParam(layerId, "uSeed", nextSeed, 0);
     return nextSeed;
   }
 
-  function setSphereSegments(value) {
+  function setSphereSegments(value: number): void {
     currentSphereSegments = value;
     rebuildDisplayGeometry();
     notifyReadouts();
   }
 
-  function setLayerEnabled(layerId, enabled) {
+  function setLayerEnabled(layerId: LayerId, enabled: boolean): void {
     const nextEnabled = Boolean(enabled);
 
     if (layerId === "skyBackground") {
@@ -1023,11 +1082,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     requestRender();
   }
 
-  function getLayerEnabled(layerId) {
+  function getLayerEnabled(layerId: LayerId): boolean {
     return Boolean(layerState[layerId]?.enabled);
   }
 
-  function setLayerRadius(layerId, value) {
+  function setLayerRadius(layerId: LayerId, value: number): void {
     const nextRadius = Number(value);
     if (!Number.isFinite(nextRadius) || nextRadius <= 0 || !layerState[layerId]) return;
 
@@ -1046,11 +1105,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     requestRender();
   }
 
-  function getLayerRadius(layerId) {
+  function getLayerRadius(layerId: LayerId): number {
     return layerState[layerId]?.radius ?? 0;
   }
 
-  function setBrightStarOverlayEnabled(enabled) {
+  function setBrightStarOverlayEnabled(enabled: boolean): void {
     brightStarOverlayEnabled = BRIGHT_STAR_OVERLAY_ENABLED && Boolean(enabled);
     layerState.brightOverlay.enabled = brightStarOverlayEnabled;
     rebuildOverlayCatalog();
@@ -1063,11 +1122,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     requestRender();
   }
 
-  function getBrightStarOverlayEnabled() {
+  function getBrightStarOverlayEnabled(): boolean {
     return brightStarOverlayEnabled;
   }
 
-  function reseed() {
+  function reseed(): void {
     reseedLayer("bakedStars");
   }
 
@@ -1091,7 +1150,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     };
   }
 
-  function setCameraInfo(cameraInfo, options = {}) {
+  function setCameraInfo(cameraInfo: Partial<CameraInfo>, options: { notify?: boolean } = {}): boolean {
     const { notify = true } = options;
     const previousScreenKey = screenBakeSignature().key;
     const nextCameraInfo = {
@@ -1132,8 +1191,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return true;
   }
 
-  function recordRender() {
-    stats.renders += 1;
+  function recordRender(): void {
+    stats.renders = Number(stats.renders ?? 0) + 1;
     starLayers.advanceRuntime();
     if (backgroundSkydome.activeBlendCount > 0 && backgroundSkydome.advancePatchBlends()) {
       requestRender();
@@ -1143,21 +1202,21 @@ export function createStarfield({ renderer, scene, requestRender }) {
     }
   }
 
-  function bakeNow() {
+  function bakeNow(): void {
     pipeline.bakeNow();
     backgroundPipeline.bakeNow();
   }
 
-  function scheduleBake(delay = 180) {
+  function scheduleBake(delay = 180): void {
     pipeline.scheduleBake(delay);
     backgroundPipeline.scheduleBake(delay);
   }
 
-  function collectStats(rendererInfo, cameraInfo = {}, options = {}) {
+  function collectStats(rendererInfo: THREE.WebGLInfo, cameraInfo: Partial<CameraInfo> = {}, options: { detail?: "panel" | "debug" } = {}) {
     return collectStatsPayload(makeStatsContext(), rendererInfo, cameraInfo, options);
   }
 
-  function dispose() {
+  function dispose(): void {
     clearTimeout(autoLayoutTimer);
     pipeline.clearBakeQueue();
     backgroundPipeline.clearBakeQueue();
@@ -1183,11 +1242,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
     downsampleMaterial.dispose();
   }
 
-  function setBakeStatusHandler(handler) {
+  function setBakeStatusHandler(handler: (label: string, disabled?: boolean) => void): void {
     bakeStatusHandler = handler;
   }
 
-  function setReadoutsChangeHandler(handler) {
+  function setReadoutsChangeHandler(handler: (readouts?: unknown) => void): void {
     readoutsChangeHandler = handler;
   }
 

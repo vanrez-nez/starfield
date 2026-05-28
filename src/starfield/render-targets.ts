@@ -3,11 +3,23 @@ import {
   BASE_TARGET_POOL_BUCKETS,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
   estimateTextureBytes,
-} from "./constants.js";
+} from "./constants";
+import type { PatchRenderTarget, StarfieldStats } from "./types";
 
-export function createRenderTargetManager({ renderer }) {
+interface RenderTargetOptions {
+  type?: THREE.TextureDataType;
+  colorSpace?: THREE.ColorSpace;
+  name?: string;
+  wrapS?: THREE.Wrapping;
+  wrapT?: THREE.Wrapping;
+}
+
+type TargetPoolMap = Map<string, PatchRenderTarget[]>;
+type BucketCounts = Record<string, number>;
+
+export function createRenderTargetManager({ renderer }: { renderer: THREE.WebGLRenderer }) {
   const gl = renderer.getContext();
-  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  const maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
   const floatBlendSupported = Boolean(renderer.extensions.get("EXT_float_blend"));
   const halfFloatAccumulationSupported = renderer.capabilities.isWebGL2
     ? Boolean(renderer.extensions.get("EXT_color_buffer_float")) && floatBlendSupported
@@ -16,11 +28,11 @@ export function createRenderTargetManager({ renderer }) {
   const targetPoolBuckets = maxTextureSize >= 8192
     ? [...BASE_TARGET_POOL_BUCKETS, 8192]
     : BASE_TARGET_POOL_BUCKETS.filter((bucket) => bucket <= maxTextureSize);
-  const targetPools = new Map();
-  const activePatchTargets = new Set();
+  const targetPools: TargetPoolMap = new Map();
+  const activePatchTargets = new Set<PatchRenderTarget>();
   let allocationCount = 0;
 
-  function createRenderTarget(width, height, options = {}) {
+  function createRenderTarget(width: number, height: number, options: RenderTargetOptions = {}): PatchRenderTarget {
     const {
       type = THREE.UnsignedByteType,
       colorSpace = THREE.SRGBColorSpace,
@@ -44,10 +56,10 @@ export function createRenderTargetManager({ renderer }) {
     target.texture.colorSpace = colorSpace;
     target.texture.generateMipmaps = false;
     allocationCount += 1;
-    return target;
+    return target as PatchRenderTarget;
   }
 
-  function createAccumulationTarget(width, height) {
+  function createAccumulationTarget(width: number, height: number): PatchRenderTarget {
     return createRenderTarget(width, height, {
       type: accumulationType,
       colorSpace: THREE.LinearSRGBColorSpace,
@@ -55,15 +67,15 @@ export function createRenderTargetManager({ renderer }) {
     });
   }
 
-  function renderTargetWidth(target) {
-    return target.width ?? target.texture?.image?.width ?? 0;
+  function renderTargetWidth(target: PatchRenderTarget): number {
+    return target.width;
   }
 
-  function renderTargetHeight(target) {
-    return target.height ?? target.texture?.image?.height ?? 0;
+  function renderTargetHeight(target: PatchRenderTarget): number {
+    return target.height;
   }
 
-  function targetPoolBucketForStorage(width, height) {
+  function targetPoolBucketForStorage(width: number, height: number): number {
     const targetSize = Math.max(width, height);
     for (const bucket of targetPoolBuckets) {
       if (bucket >= targetSize) return bucket;
@@ -71,12 +83,12 @@ export function createRenderTargetManager({ renderer }) {
     return Math.min(maxTextureSize, targetSize);
   }
 
-  function targetPoolKey(width, height, wrapS, wrapT) {
+  function targetPoolKey(width: number, height: number, wrapS: THREE.Wrapping, wrapT: THREE.Wrapping): string {
     const bucket = targetPoolBucketForStorage(width, height);
     return `${bucket}:${Math.round(width)}x${Math.round(height)}:${wrapS}:${wrapT}`;
   }
 
-  function patchTargetBytes(target) {
+  function patchTargetBytes(target: PatchRenderTarget): number {
     return estimateTextureBytes(
       renderTargetWidth(target),
       renderTargetHeight(target),
@@ -84,7 +96,7 @@ export function createRenderTargetManager({ renderer }) {
     );
   }
 
-  function createPatchRenderTarget(width, height, options = {}) {
+  function createPatchRenderTarget(width: number, height: number, options: RenderTargetOptions = {}): PatchRenderTarget {
     const {
       name = "Baked skydome patch",
       wrapS = THREE.ClampToEdgeWrapping,
@@ -105,14 +117,14 @@ export function createRenderTargetManager({ renderer }) {
     return target;
   }
 
-  function targetPoolListFor(key) {
+  function targetPoolListFor(key: string): PatchRenderTarget[] {
     if (!targetPools.has(key)) {
       targetPools.set(key, []);
     }
-    return targetPools.get(key);
+    return targetPools.get(key) ?? [];
   }
 
-  function acquireTarget(width, height, options = {}) {
+  function acquireTarget(width: number, height: number, options: RenderTargetOptions = {}): PatchRenderTarget {
     const {
       name = "Baked skydome patch",
       wrapS = THREE.ClampToEdgeWrapping,
@@ -136,24 +148,35 @@ export function createRenderTargetManager({ renderer }) {
     return target;
   }
 
-  function releaseTarget(target) {
+  function releaseTarget(target: PatchRenderTarget | null | undefined): void {
     if (!target || target.starfieldPool?.inPool) return;
 
     activePatchTargets.delete(target);
+    const poolState = target.starfieldPool ?? {
+      bucket: targetPoolBucketForStorage(renderTargetWidth(target), renderTargetHeight(target)),
+      key: targetPoolKey(
+        renderTargetWidth(target),
+        renderTargetHeight(target),
+        target.texture.wrapS,
+        target.texture.wrapT,
+      ),
+      bytesPerPixel: FINAL_TEXTURE_BYTES_PER_PIXEL,
+      inPool: false,
+    };
     target.starfieldPool = {
-      ...target.starfieldPool,
+      ...poolState,
       inPool: true,
     };
     target.dispose();
   }
 
-  function disposePatchTarget(target) {
+  function disposePatchTarget(target: PatchRenderTarget | null | undefined): void {
     if (!target) return;
     activePatchTargets.delete(target);
     target.dispose();
   }
 
-  function disposeTargetPool() {
+  function disposeTargetPool(): void {
     targetPools.forEach((pool) => {
       pool.forEach((target) => target.dispose());
       pool.length = 0;
@@ -161,16 +184,16 @@ export function createRenderTargetManager({ renderer }) {
     targetPools.clear();
   }
 
-  function pooledTargets() {
+  function pooledTargets(): PatchRenderTarget[] {
     return [...targetPools.values()].flat();
   }
 
-  function pooledTargetBytes() {
+  function pooledTargetBytes(): number {
     return pooledTargets().reduce((bytes, target) => bytes + patchTargetBytes(target), 0);
   }
 
-  function pooledTargetsByBucket() {
-    const buckets = {};
+  function pooledTargetsByBucket(): BucketCounts {
+    const buckets: BucketCounts = {};
     pooledTargets().forEach((target) => {
       const bucket = target.starfieldPool?.bucket
         ?? targetPoolBucketForStorage(renderTargetWidth(target), renderTargetHeight(target));
@@ -179,7 +202,7 @@ export function createRenderTargetManager({ renderer }) {
     return buckets;
   }
 
-  function targetBucketSummary(buckets) {
+  function targetBucketSummary(buckets: BucketCounts): string {
     const entries = Object.entries(buckets)
       .sort(([a], [b]) => Number(a) - Number(b));
     return entries.length
@@ -187,11 +210,11 @@ export function createRenderTargetManager({ renderer }) {
       : "none";
   }
 
-  function activePatchTargetBytes() {
+  function activePatchTargetBytes(): number {
     return [...activePatchTargets].reduce((bytes, target) => bytes + patchTargetBytes(target), 0);
   }
 
-  function trimTargetPoolToBudget(budgetBytes) {
+  function trimTargetPoolToBudget(budgetBytes: number): void {
     let totalBytes = activePatchTargetBytes() + pooledTargetBytes();
     if (totalBytes <= budgetBytes) return;
 
@@ -210,7 +233,7 @@ export function createRenderTargetManager({ renderer }) {
     }
   }
 
-  function createFallbackPatchTexture() {
+  function createFallbackPatchTexture(): THREE.DataTexture {
     const texture = new THREE.DataTexture(
       new Uint8Array([0, 0, 0, 0]),
       1,
@@ -227,10 +250,10 @@ export function createRenderTargetManager({ renderer }) {
     return texture;
   }
 
-  function getStats() {
+  function getStats(): StarfieldStats {
     return {
       allocationCount,
-      activePatchTargets,
+      activePatchTargets: activePatchTargets.size,
       activeTargetCount: activePatchTargets.size,
       pooledTargetCount: pooledTargets().length,
       pooledTargetsByBucket: pooledTargetsByBucket(),

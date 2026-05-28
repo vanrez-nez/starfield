@@ -6,12 +6,62 @@ import {
   MAX_BAKE_JOBS_PER_FRAME,
   PATCH_STATES,
   screenPixelAngleFromInfo,
-} from "./constants.js";
+} from "./constants";
 import {
   autoSupersampleForDescriptor,
   descriptorPrecisionHeight,
   descriptorPrecisionWidth,
-} from "./patch-layout.js";
+} from "./patch-layout";
+import type {
+  BakeJob,
+  BakeUniforms,
+  CameraInfo,
+  DownsampleUniforms,
+  PatchDescriptor,
+  PatchLayout,
+  PatchRenderTarget,
+  QueueState,
+  RequestRender,
+  StarfieldStats,
+} from "./types";
+
+interface BakePipelineSkydome {
+  activeBlendCount: number;
+  finishDescriptorBlend(descriptor: PatchDescriptor): void;
+  promoteDescriptorBakeTarget(descriptor: PatchDescriptor, target: PatchRenderTarget): void;
+}
+
+interface BakePipelineArgs {
+  renderer: THREE.WebGLRenderer;
+  starScene: THREE.Scene;
+  bakeCamera: THREE.Camera;
+  downsampleScene: THREE.Scene;
+  downsampleUniforms: DownsampleUniforms;
+  bakeUniforms: BakeUniforms;
+  maxTextureSize: number;
+  stats: StarfieldStats;
+  skydome: BakePipelineSkydome;
+  getCurrentCameraInfo: () => CameraInfo;
+  getCurrentPatchLayout: () => PatchLayout;
+  getCurrentSupersample: () => number;
+  setCurrentSupersample: (value: number) => void;
+  getPatchDescriptors: () => PatchDescriptor[];
+  getSupersampleTarget: () => PatchRenderTarget;
+  targetForDescriptor: (descriptor: PatchDescriptor, label?: string) => PatchRenderTarget;
+  targetMatchesDescriptor?: (descriptor: PatchDescriptor, target: PatchRenderTarget) => boolean;
+  releaseTarget?: (target: PatchRenderTarget) => void;
+  descriptorById: (patchId: string) => PatchDescriptor | undefined;
+  setStarBakeGeometry: (geometry: THREE.InstancedBufferGeometry) => void;
+  createBakeGeometry: (descriptor: PatchDescriptor) => THREE.InstancedBufferGeometry;
+  ensureStarCatalog: () => void;
+  updatePatchStats: () => void;
+  updateDemandStats: () => void;
+  notifyReadouts: () => void;
+  setBakeStatus: (label: string, disabled?: boolean) => void;
+  onDescriptorBaked?: (descriptor: PatchDescriptor, target: PatchRenderTarget) => void;
+  onBakeQueueDrained?: () => void;
+  requestRender: RequestRender;
+}
 
 export function createBakePipeline({
   renderer,
@@ -43,17 +93,17 @@ export function createBakePipeline({
   onDescriptorBaked = () => {},
   onBakeQueueDrained = () => {},
   requestRender,
-}) {
-  const bakeJobQueue = [];
-  const queuedBakeJobsByPatchId = new Map();
-  let activeBakeJob = null;
+}: BakePipelineArgs) {
+  const bakeJobQueue: BakeJob[] = [];
+  const queuedBakeJobsByPatchId = new Map<string, BakeJob>();
+  let activeBakeJob: BakeJob | null = null;
   let completedBakeJobs = 0;
   let totalQueuedBakeJobs = 0;
   let bakeQueueFrameRequested = false;
   let bakeTimer = 0;
   let layerBakeTimer = 0;
 
-  function queueState() {
+  function queueState(): QueueState {
     return {
       bakeJobQueue,
       activeBakeJob,
@@ -64,7 +114,7 @@ export function createBakePipeline({
     };
   }
 
-  function syncBakeQueueStats() {
+  function syncBakeQueueStats(): void {
     const queue = queueState();
     stats.pendingBakeJobs = queue.pendingBakeJobs;
     stats.activeBakeJobs = queue.activeBakeJobs;
@@ -80,21 +130,25 @@ export function createBakePipeline({
       : "none";
   }
 
-  function reasonForDescriptor(descriptor, fallbackReason = "upgrade") {
+  function reasonForDescriptor(descriptor: PatchDescriptor, fallbackReason: string | null = "upgrade"): string {
     if (fallbackReason) return fallbackReason;
     if (descriptor.state === PATCH_STATES.EMPTY) return "new";
     if (descriptor.state === PATCH_STATES.STALE) return "stale";
     return "upgrade";
   }
 
-  function jobForDescriptor(descriptor, reason) {
+  function jobForDescriptor(descriptor: PatchDescriptor, reason: string | null): BakeJob {
     return {
       patchId: descriptor.id,
       reason: reasonForDescriptor(descriptor, reason),
     };
   }
 
-  function enqueueBakeJobs(descriptors, reason = "upgrade", { replace = false } = {}) {
+  function enqueueBakeJobs(
+    descriptors: PatchDescriptor[],
+    reason: string | null = "upgrade",
+    { replace = false }: { replace?: boolean } = {},
+  ): void {
     if (replace) {
       bakeJobQueue.length = 0;
       queuedBakeJobsByPatchId.clear();
@@ -125,7 +179,7 @@ export function createBakePipeline({
     updateDemandStats();
   }
 
-  function clearBakeQueue() {
+  function clearBakeQueue(): void {
     clearTimeout(bakeTimer);
     clearTimeout(layerBakeTimer);
     bakeJobQueue.length = 0;
@@ -136,7 +190,7 @@ export function createBakePipeline({
     syncBakeQueueStats();
   }
 
-  function requestBakeQueueProcessing() {
+  function requestBakeQueueProcessing(): void {
     if (bakeQueueFrameRequested || bakeJobQueue.length === 0) {
       syncBakeQueueStats();
       return;
@@ -146,13 +200,13 @@ export function createBakePipeline({
     requestAnimationFrame(processBakeQueueFrame);
   }
 
-  function ensureSupersampleTargetSize(width, height) {
+  function ensureSupersampleTargetSize(width: number, height: number): void {
     const supersampleTarget = getSupersampleTarget();
     if (supersampleTarget.width === width && supersampleTarget.height === height) return;
     supersampleTarget.setSize(width, height);
   }
 
-  function renderPatchDescriptor(descriptor, target) {
+  function renderPatchDescriptor(descriptor: PatchDescriptor, target: PatchRenderTarget): void {
     const currentSupersample = Math.min(
       getCurrentSupersample(),
       autoSupersampleForDescriptor(descriptor, maxTextureSize),
@@ -184,7 +238,7 @@ export function createBakePipeline({
     renderer.render(downsampleScene, bakeCamera);
   }
 
-  function prepareDescriptorBakeTarget(descriptor) {
+  function prepareDescriptorBakeTarget(descriptor: PatchDescriptor): PatchRenderTarget {
     if (descriptor.blendActive) {
       skydome.finishDescriptorBlend(descriptor);
     }
@@ -214,11 +268,11 @@ export function createBakePipeline({
     return descriptor.currentTarget;
   }
 
-  function markPatchDescriptorsQueued() {
+  function markPatchDescriptorsQueued(): void {
     enqueueBakeJobs(getPatchDescriptors(), null, { replace: true });
   }
 
-  function markPatchDescriptorsStale(reason = "stale") {
+  function markPatchDescriptorsStale(reason = "stale"): void {
     getPatchDescriptors().forEach((descriptor) => {
       if (descriptor.state === PATCH_STATES.RESIDENT) {
         descriptor.state = PATCH_STATES.STALE;
@@ -231,7 +285,7 @@ export function createBakePipeline({
     updateDemandStats();
   }
 
-  function scheduleLayerBakeJobs(descriptors, reason = "screen", delay = CAMERA_BAKE_IDLE_MS) {
+  function scheduleLayerBakeJobs(descriptors: PatchDescriptor[], reason = "screen", delay = CAMERA_BAKE_IDLE_MS): void {
     if (!descriptors.length) return;
 
     clearTimeout(layerBakeTimer);
@@ -243,7 +297,7 @@ export function createBakePipeline({
     syncBakeQueueStats();
   }
 
-  function processBakeQueueFrame() {
+  function processBakeQueueFrame(): void {
     bakeQueueFrameRequested = false;
     if (bakeJobQueue.length === 0 || activeBakeJob) {
       syncBakeQueueStats();
@@ -270,6 +324,7 @@ export function createBakePipeline({
 
     while (completedThisFrame < jobsThisFrame && bakeJobQueue.length > 0) {
       const job = bakeJobQueue.shift();
+      if (!job) continue;
       queuedBakeJobsByPatchId.delete(job.patchId);
       const descriptor = descriptorById(job.patchId);
       if (!descriptor) {
@@ -298,7 +353,7 @@ export function createBakePipeline({
     renderer.setRenderTarget(previousTarget);
     renderer.autoClear = previousAutoClear;
     renderer.setClearColor(previousClearColor, previousClearAlpha);
-    stats.bakes += completedThisFrame;
+    stats.bakes = Number(stats.bakes ?? 0) + completedThisFrame;
     setCurrentSupersample(getCurrentPatchLayout().supersample ?? getCurrentSupersample());
     updatePatchStats();
     stats.lastBakeMs = Number((performance.now() - bakeStart).toFixed(2));
@@ -315,7 +370,7 @@ export function createBakePipeline({
     requestRender();
   }
 
-  function bakeNow() {
+  function bakeNow(): void {
     clearTimeout(bakeTimer);
     clearTimeout(layerBakeTimer);
     layerBakeTimer = 0;
@@ -326,12 +381,12 @@ export function createBakePipeline({
     requestBakeQueueProcessing();
   }
 
-  function scheduleBake(delay = 180) {
+  function scheduleBake(delay = 180): void {
     clearTimeout(bakeTimer);
     bakeTimer = window.setTimeout(bakeNow, delay);
   }
 
-  function dispose() {
+  function dispose(): void {
     clearBakeQueue();
     clearTimeout(bakeTimer);
     clearTimeout(layerBakeTimer);

@@ -2,14 +2,23 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import Stats from "three/addons/libs/stats.module.js";
 import "./styles.css";
-import { createControls } from "./controls.js";
-import { createGpuStarfield } from "./gpu-starfield.js";
-import { createStarfield } from "./starfield.js";
+import { createControls } from "./controls";
+import { createGpuStarfield } from "./gpu-starfield";
+import { createStarfield } from "./starfield";
+import type { CameraInfo, StarfieldStats } from "./starfield/types";
 
 const HORIZONTAL_FOV = 60;
 
-const canvas = document.querySelector("#scene");
-const panel = document.querySelector("#panel");
+function queryRequired<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) {
+    throw new Error(`Missing required element: ${selector}`);
+  }
+  return element;
+}
+
+const canvas = queryRequired<HTMLCanvasElement>("#scene");
+const panel = queryRequired<HTMLElement>("#panel");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -31,7 +40,7 @@ const drawingBufferSize = new THREE.Vector2();
 const cameraForward = new THREE.Vector3();
 const clock = new THREE.Clock();
 
-function verticalFovForViewport(horizontalFov, aspect) {
+function verticalFovForViewport(horizontalFov: number, aspect: number): number {
   const horizontalRadians = THREE.MathUtils.degToRad(horizontalFov);
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(horizontalRadians * 0.5) / Math.max(aspect, 0.001)));
 }
@@ -50,10 +59,10 @@ const state = {
   pixelRatio: Math.min(window.devicePixelRatio, 2),
 };
 
-let starfield = null;
-let gpuStarfield = null;
+let starfield: ReturnType<typeof createStarfield>;
+let gpuStarfield: ReturnType<typeof createGpuStarfield>;
 
-const cachedCameraInfo = {
+const cachedCameraInfo: CameraInfo = {
   horizontalFov: HORIZONTAL_FOV,
   verticalFov: Number(camera.fov.toFixed(2)),
   screenWidth: 1,
@@ -85,14 +94,14 @@ orbitControls.saveState();
   }, { passive: true });
 });
 
-function syncRenderCameraFromOrbit() {
+function syncRenderCameraFromOrbit(): void {
   orbitCamera.updateMatrixWorld();
   camera.quaternion.copy(orbitCamera.quaternion);
   camera.position.set(0, 0, 0);
   camera.updateMatrixWorld();
 }
 
-function updateCameraInfoCache({ screen = false } = {}) {
+function updateCameraInfoCache({ screen = false }: { screen?: boolean } = {}): CameraInfo {
   if (screen) {
     renderer.getDrawingBufferSize(drawingBufferSize);
     cachedCameraInfo.horizontalFov = HORIZONTAL_FOV;
@@ -111,11 +120,11 @@ function updateCameraInfoCache({ screen = false } = {}) {
   return cachedCameraInfo;
 }
 
-function cameraInfo({ screen = false } = {}) {
+function cameraInfo({ screen = false }: { screen?: boolean } = {}): CameraInfo {
   return { ...updateCameraInfoCache({ screen }) };
 }
 
-function renderFrame() {
+function renderFrame(): void {
   stats.begin();
   applyResizeIfNeeded();
   const delta = clock.getDelta();
@@ -132,12 +141,12 @@ function renderFrame() {
   stats.end();
 }
 
-function animationLoop() {
+function animationLoop(): void {
   renderFrame();
   state.animationFrame = requestAnimationFrame(animationLoop);
 }
 
-function requestRuntimeRender() {
+function requestRuntimeRender(): void {
   // Compatibility hook for starfield internals; the runtime loop is already active.
 }
 
@@ -155,23 +164,23 @@ const initialCameraInfo = cameraInfo({ screen: true });
 starfield.setCameraInfo(initialCameraInfo);
 gpuStarfield.setCameraInfo(initialCameraInfo);
 
-function recenter() {
+function recenter(): void {
   orbitControls.reset();
   syncRenderCameraFromOrbit();
   requestRuntimeRender();
 }
 
 const uiControls = createControls({
-  rows: document.querySelector("#rows"),
+  rows: queryRequired<HTMLElement>("#rows"),
   buttons: {
-    bake: document.querySelector("#rebake"),
-    seed: document.querySelector("#seedBtn"),
-    recenter: document.querySelector("#recenterBtn"),
-    overlay: document.querySelector("#toggleOverlayBtn"),
+    bake: queryRequired<HTMLButtonElement>("#rebake"),
+    seed: queryRequired<HTMLButtonElement>("#seedBtn"),
+    recenter: queryRequired<HTMLButtonElement>("#recenterBtn"),
+    overlay: document.querySelector<HTMLButtonElement>("#toggleOverlayBtn"),
   },
   starfield,
   gpuStarfield,
-  getStats(options = {}) {
+  getStats(options: { detail?: "panel" | "debug" } = {}): StarfieldStats {
     applyResizeIfNeeded();
     syncRenderCameraFromOrbit();
     return {
@@ -189,7 +198,7 @@ orbitControls.addEventListener("end", () => {
   canvas.classList.remove("is-dragging");
 });
 
-function applyResizeIfNeeded({ force = false } = {}) {
+function applyResizeIfNeeded({ force = false }: { force?: boolean } = {}): void {
   const width = window.innerWidth;
   const height = window.innerHeight;
   const pixelRatio = Math.min(window.devicePixelRatio, 2);
@@ -215,7 +224,7 @@ function applyResizeIfNeeded({ force = false } = {}) {
   requestRuntimeRender();
 }
 
-function resize() {
+function resize(): void {
   state.resizePending = true;
 }
 

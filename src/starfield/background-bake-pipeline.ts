@@ -5,7 +5,38 @@ import {
   MAX_BAKE_JOBS_PER_FRAME,
   PATCH_STATES,
   formatBytes,
-} from "./constants.js";
+} from "./constants";
+import type {
+  BackgroundUniforms,
+  BakeJob,
+  PatchDescriptor,
+  PatchRenderTarget,
+  RequestRender,
+  StarfieldStats,
+} from "./types";
+
+interface BackgroundBakeSkydome {
+  finishDescriptorBlend(descriptor: PatchDescriptor): void;
+  promoteDescriptorBakeTarget(descriptor: PatchDescriptor, target: PatchRenderTarget): void;
+}
+
+interface BackgroundBakePipelineArgs {
+  renderer: THREE.WebGLRenderer;
+  bakeCamera: THREE.Camera;
+  backgroundScene: THREE.Scene;
+  backgroundUniforms: BackgroundUniforms;
+  skydome: BackgroundBakeSkydome;
+  stats: StarfieldStats;
+  getPatchDescriptors: () => PatchDescriptor[];
+  targetForDescriptor: (descriptor: PatchDescriptor, label?: string) => PatchRenderTarget;
+  targetMatchesDescriptor: (descriptor: PatchDescriptor, target: PatchRenderTarget) => boolean;
+  releaseTarget: (target: PatchRenderTarget) => void;
+  descriptorById: (patchId: string) => PatchDescriptor | undefined;
+  targetBytes: (target: PatchRenderTarget) => number;
+  notifyReadouts: () => void;
+  requestRender: RequestRender;
+  onBakeQueueDrained?: () => void;
+}
 
 export function createBackgroundBakePipeline({
   renderer,
@@ -23,38 +54,38 @@ export function createBackgroundBakePipeline({
   notifyReadouts,
   requestRender,
   onBakeQueueDrained = () => {},
-}) {
-  const bakeJobQueue = [];
-  const queuedBakeJobsByPatchId = new Map();
+}: BackgroundBakePipelineArgs) {
+  const bakeJobQueue: BakeJob[] = [];
+  const queuedBakeJobsByPatchId = new Map<string, BakeJob>();
   let bakeTimer = 0;
   let bakeQueueFrameRequested = false;
-  let activeBakeJob = null;
+  let activeBakeJob: BakeJob | null = null;
   let completedBakeJobs = 0;
   let totalQueuedBakeJobs = 0;
 
-  function descriptorTargets(descriptor) {
+  function descriptorTargets(descriptor: PatchDescriptor): Set<PatchRenderTarget> {
     return new Set([
       descriptor.currentTarget,
       descriptor.nextTarget,
       descriptor.target,
       descriptor.blendFromTarget,
       descriptor.blendToTarget,
-    ].filter(Boolean));
+    ].filter((target): target is PatchRenderTarget => Boolean(target)));
   }
 
-  function residentTextureBytes() {
-    const targets = new Set();
+  function residentTextureBytes(): number {
+    const targets = new Set<PatchRenderTarget>();
     getPatchDescriptors().forEach((descriptor) => {
       descriptorTargets(descriptor).forEach((target) => targets.add(target));
     });
     return [...targets].reduce((bytes, target) => bytes + targetBytes(target), 0);
   }
 
-  function dirtyPatchCount() {
+  function dirtyPatchCount(): number {
     return getPatchDescriptors().filter((descriptor) => descriptor.backgroundDirty || descriptor.state !== PATCH_STATES.RESIDENT).length;
   }
 
-  function syncStats() {
+  function syncStats(): void {
     const descriptors = getPatchDescriptors();
     const residentBytes = residentTextureBytes();
     stats.backgroundPatchCount = descriptors.length;
@@ -73,21 +104,25 @@ export function createBackgroundBakePipeline({
       .join(", ") || "none";
   }
 
-  function jobForDescriptor(descriptor, reason = "background") {
+  function jobForDescriptor(descriptor: PatchDescriptor, reason = "background"): BakeJob {
     return {
       patchId: descriptor.id,
       reason,
     };
   }
 
-  function clearBakeQueue() {
+  function clearBakeQueue(): void {
     bakeJobQueue.length = 0;
     queuedBakeJobsByPatchId.clear();
     activeBakeJob = null;
     syncStats();
   }
 
-  function enqueueBakeJobs(descriptors, reason = "background", { replace = false } = {}) {
+  function enqueueBakeJobs(
+    descriptors: PatchDescriptor[],
+    reason = "background",
+    { replace = false }: { replace?: boolean } = {},
+  ): void {
     if (replace) clearBakeQueue();
 
     descriptors.forEach((descriptor) => {
@@ -104,7 +139,7 @@ export function createBackgroundBakePipeline({
     syncStats();
   }
 
-  function markPatchDescriptorsStale(reason = "background") {
+  function markPatchDescriptorsStale(reason = "background"): void {
     getPatchDescriptors().forEach((descriptor) => {
       if (descriptor.state === PATCH_STATES.RESIDENT) {
         descriptor.state = PATCH_STATES.STALE;
@@ -115,13 +150,13 @@ export function createBackgroundBakePipeline({
     syncStats();
   }
 
-  function requestBakeQueueProcessing() {
+  function requestBakeQueueProcessing(): void {
     if (bakeQueueFrameRequested) return;
     bakeQueueFrameRequested = true;
     requestAnimationFrame(processBakeQueueFrame);
   }
 
-  function prepareDescriptorBakeTarget(descriptor) {
+  function prepareDescriptorBakeTarget(descriptor: PatchDescriptor): PatchRenderTarget {
     if (descriptor.blendActive) {
       skydome.finishDescriptorBlend(descriptor);
     }
@@ -151,7 +186,7 @@ export function createBackgroundBakePipeline({
     return descriptor.currentTarget;
   }
 
-  function renderPatchDescriptor(descriptor, target) {
+  function renderPatchDescriptor(descriptor: PatchDescriptor, target: PatchRenderTarget): void {
     backgroundUniforms.uTileUvMin.value.copy(descriptor.storageUvMin);
     backgroundUniforms.uTileUvSize.value.copy(descriptor.storageUvSize);
     renderer.setRenderTarget(target);
@@ -159,7 +194,7 @@ export function createBackgroundBakePipeline({
     renderer.render(backgroundScene, bakeCamera);
   }
 
-  function processBakeQueueFrame() {
+  function processBakeQueueFrame(): void {
     bakeQueueFrameRequested = false;
     if (bakeJobQueue.length === 0 || activeBakeJob) {
       syncStats();
@@ -180,6 +215,7 @@ export function createBackgroundBakePipeline({
 
     while (completedThisFrame < MAX_BAKE_JOBS_PER_FRAME && bakeJobQueue.length > 0) {
       const job = bakeJobQueue.shift();
+      if (!job) continue;
       queuedBakeJobsByPatchId.delete(job.patchId);
       const descriptor = descriptorById(job.patchId);
       if (!descriptor) continue;
@@ -207,7 +243,7 @@ export function createBackgroundBakePipeline({
     renderer.setRenderTarget(previousTarget);
     renderer.autoClear = previousAutoClear;
     renderer.setClearColor(previousClearColor, previousClearAlpha);
-    stats.backgroundBakes = (stats.backgroundBakes ?? 0) + completedThisFrame;
+    stats.backgroundBakes = Number(stats.backgroundBakes ?? 0) + completedThisFrame;
     stats.backgroundLastBakeMs = Number((performance.now() - bakeStart).toFixed(2));
     syncStats();
 
@@ -220,7 +256,7 @@ export function createBackgroundBakePipeline({
     requestRender();
   }
 
-  function bakeNow({ onlyDirty = false } = {}) {
+  function bakeNow({ onlyDirty = false }: { onlyDirty?: boolean } = {}): void {
     clearTimeout(bakeTimer);
     completedBakeJobs = 0;
     totalQueuedBakeJobs = 0;
@@ -231,14 +267,14 @@ export function createBackgroundBakePipeline({
     requestBakeQueueProcessing();
   }
 
-  function scheduleBake(delay = 180) {
+  function scheduleBake(delay = 180): void {
     clearTimeout(bakeTimer);
     bakeTimer = window.setTimeout(() => {
       bakeNow({ onlyDirty: true });
     }, Math.max(0, delay));
   }
 
-  function dispose() {
+  function dispose(): void {
     clearTimeout(bakeTimer);
     clearBakeQueue();
   }

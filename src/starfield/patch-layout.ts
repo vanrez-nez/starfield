@@ -12,7 +12,75 @@ import {
   STARFIELD_ALLOCATION_BUDGET_BYTES,
   equirectDirectionFromUv,
   estimateTextureBytes,
-} from "./constants.js";
+} from "./constants";
+import type {
+  CameraInfo,
+  PatchAllocation,
+  PatchDescriptor,
+  PatchLayout,
+  Size2,
+} from "./types";
+
+interface CreatePatchLayoutForGridArgs {
+  columns: number;
+  rows?: number;
+  contentWidth: number;
+  contentHeight: number;
+  guard?: number;
+  reason?: string;
+  demand?: PatchLayout["demand"];
+  supersample?: number;
+  qualityScale?: number;
+  idealVirtualWidth?: number;
+  idealVirtualHeight?: number;
+  idealPatchWidth?: number;
+  idealPatchHeight?: number;
+  allocation?: PatchAllocation | null;
+  targetTexelsPerPixel?: number;
+}
+
+interface CandidateMemoryArgs {
+  storageWidth: number;
+  storageHeight: number;
+  patchCount: number;
+  supersample: number;
+  accumulationBytes: number;
+  residentLayerCount?: number;
+}
+
+type CandidateMemoryBaseArgs = Omit<CandidateMemoryArgs, "supersample">;
+
+interface SupersampleChoice {
+  supersample: number;
+  residentBytes: number;
+  scratchBytes: number;
+  peakBytes: number;
+  peakBudgetRatio: number;
+}
+
+interface MemoryBoundCandidateArgs {
+  grid: number;
+  idealVirtualWidth: number;
+  idealVirtualHeight: number;
+  maxTextureSize: number;
+  budgetBytes: number;
+  accumulationBytes: number;
+  residentLayerCount?: number;
+}
+
+interface MemoryBoundCandidate {
+  grid: number;
+  guard: number;
+  patchCount: number;
+  idealPatchWidth: number;
+  idealPatchHeight: number;
+  contentWidth: number;
+  contentHeight: number;
+  storageWidth: number;
+  storageHeight: number;
+  allocation: SupersampleChoice;
+  scale: number;
+}
 
 function createPatchLayoutForGrid({
   columns,
@@ -30,7 +98,7 @@ function createPatchLayoutForGrid({
   idealPatchHeight = contentHeight,
   allocation = null,
   targetTexelsPerPixel = 1,
-}) {
+}: CreatePatchLayoutForGridArgs): PatchLayout {
   const safeColumns = Math.max(1, Math.round(columns));
   const safeRows = Math.max(1, Math.round(rows));
   const safeContentWidth = Math.max(1, Math.round(contentWidth));
@@ -43,6 +111,7 @@ function createPatchLayoutForGrid({
     virtualHeight: safeContentHeight * safeRows,
     columns: safeColumns,
     rows: safeRows,
+    patchCount: safeColumns * safeRows,
     guard,
     contentWidth: safeContentWidth,
     contentHeight: safeContentHeight,
@@ -61,18 +130,19 @@ function createPatchLayoutForGrid({
     idealPatchHeight,
     allocation,
     targetTexelsPerPixel,
+    demand,
   };
 }
 
-function accumulationBytesPerPixel(accumulationType) {
+function accumulationBytesPerPixel(accumulationType: THREE.TextureDataType): number {
   return accumulationType === THREE.HalfFloatType ? 8 : 4;
 }
 
-function alignTexels(value, alignment = PATCH_SIZE_ALIGNMENT) {
+function alignTexels(value: number, alignment = PATCH_SIZE_ALIGNMENT): number {
   return Math.max(alignment, Math.ceil(Math.max(1, value) / alignment) * alignment);
 }
 
-function clampContentSize(value, maxContentSize) {
+function clampContentSize(value: number, maxContentSize: number): number {
   return Math.max(1, Math.min(maxContentSize, alignTexels(value)));
 }
 
@@ -83,7 +153,7 @@ function candidateMemory({
   supersample,
   accumulationBytes,
   residentLayerCount = 1,
-}) {
+}: CandidateMemoryArgs): Omit<SupersampleChoice, "supersample" | "peakBudgetRatio"> {
   const residentBytes = estimateTextureBytes(storageWidth, storageHeight, FINAL_TEXTURE_BYTES_PER_PIXEL) * patchCount * residentLayerCount;
   const scratchBytes = estimateTextureBytes(
     storageWidth * supersample,
@@ -105,7 +175,7 @@ function chooseSupersample({
   maxTextureSize,
   accumulationBytes,
   residentLayerCount = 1,
-}) {
+}: CandidateMemoryBaseArgs & { budgetBytes: number; maxTextureSize: number }): SupersampleChoice {
   const maxSupersample = Math.max(1, Math.min(
     MAX_AUTO_SUPERSAMPLE,
     Math.floor(maxTextureSize / Math.max(1, storageWidth)),
@@ -152,7 +222,7 @@ function buildMemoryBoundCandidate({
   budgetBytes,
   accumulationBytes,
   residentLayerCount = 1,
-}) {
+}: MemoryBoundCandidateArgs): MemoryBoundCandidate {
   const guard = grid === 1 ? 0 : PATCH_GUARD_TEXELS;
   const maxContentWidth = Math.max(1, maxTextureSize - guard * 2);
   const maxContentHeight = Math.max(1, maxTextureSize - guard * 2);
@@ -165,7 +235,7 @@ function buildMemoryBoundCandidate({
   );
   const patchCount = grid * grid;
   let scale = Math.max(0.001, textureScale);
-  let result = null;
+  let result: Omit<MemoryBoundCandidate, "grid" | "guard" | "patchCount" | "idealPatchWidth" | "idealPatchHeight"> | null = null;
 
   for (let attempt = 0; attempt < 18; attempt += 1) {
     const contentWidth = clampContentSize(idealPatchWidth * scale, maxContentWidth);
@@ -197,6 +267,25 @@ function buildMemoryBoundCandidate({
     scale = Math.max(0.001, nextScale);
   }
 
+  if (!result) {
+    result = {
+      contentWidth: clampContentSize(idealPatchWidth * scale, maxContentWidth),
+      contentHeight: clampContentSize(idealPatchHeight * scale, maxContentHeight),
+      storageWidth: clampContentSize(idealPatchWidth * scale, maxContentWidth) + guard * 2,
+      storageHeight: clampContentSize(idealPatchHeight * scale, maxContentHeight) + guard * 2,
+      allocation: chooseSupersample({
+        storageWidth: clampContentSize(idealPatchWidth * scale, maxContentWidth) + guard * 2,
+        storageHeight: clampContentSize(idealPatchHeight * scale, maxContentHeight) + guard * 2,
+        patchCount,
+        budgetBytes,
+        maxTextureSize,
+        accumulationBytes,
+        residentLayerCount,
+      }),
+      scale,
+    };
+  }
+
   return {
     grid,
     guard,
@@ -212,7 +301,12 @@ export function createAutoPatchLayout({
   maxTextureSize,
   accumulationType = THREE.UnsignedByteType,
   residentLayerCount = 1,
-}) {
+}: {
+  cameraInfo: CameraInfo;
+  maxTextureSize: number;
+  accumulationType?: THREE.TextureDataType;
+  residentLayerCount?: number;
+}): PatchLayout {
   const screenWidth = Math.max(1, Number(cameraInfo.screenWidth) || 1);
   const screenHeight = Math.max(1, Number(cameraInfo.screenHeight) || 1);
   const horizontalFovRad = THREE.MathUtils.degToRad(Math.max(Number(cameraInfo.horizontalFov) || 0, 0.001));
@@ -278,14 +372,14 @@ export function createAutoPatchLayout({
   });
 }
 
-function autoSupersampleForStorage(width, height, maxTextureSize) {
+function autoSupersampleForStorage(width: number, height: number, maxTextureSize: number): number {
   const widthLimit = Math.floor(maxTextureSize / Math.max(1, width));
   const heightLimit = Math.floor(maxTextureSize / Math.max(1, height));
   const textureLimit = Math.min(widthLimit, heightLimit);
   return Math.max(1, Math.min(MAX_AUTO_SUPERSAMPLE, textureLimit));
 }
 
-export function autoSupersampleForDescriptor(descriptor, maxTextureSize) {
+export function autoSupersampleForDescriptor(descriptor: PatchDescriptor, maxTextureSize: number): number {
   return autoSupersampleForStorage(
     descriptor.storageSize.width,
     descriptor.storageSize.height,
@@ -293,33 +387,39 @@ export function autoSupersampleForDescriptor(descriptor, maxTextureSize) {
   );
 }
 
-export function patchGridLabel(layout) {
+export function patchGridLabel(layout: Pick<PatchLayout, "columns" | "rows">): string {
   return `${layout.columns}x${layout.rows}`;
 }
 
-export function descriptorPrecisionWidth(descriptor, supersample) {
+export function descriptorPrecisionWidth(descriptor: PatchDescriptor, supersample: number): number {
   return descriptor.storageSize.width * supersample;
 }
 
-export function descriptorPrecisionHeight(descriptor, supersample) {
+export function descriptorPrecisionHeight(descriptor: PatchDescriptor, supersample: number): number {
   return descriptor.storageSize.height * supersample;
 }
 
-export function maxDescriptorStorageSize(descriptors) {
+export function maxDescriptorStorageSize(descriptors: PatchDescriptor[]): Size2 {
   return descriptors.reduce((size, descriptor) => ({
     width: Math.max(size.width, descriptor.storageSize.width),
     height: Math.max(size.height, descriptor.storageSize.height),
   }), { width: 1, height: 1 });
 }
 
-export function maxDescriptorPrecisionSize(descriptors, supersample) {
+export function maxDescriptorPrecisionSize(descriptors: PatchDescriptor[], supersample: number): Size2 {
   return descriptors.reduce((size, descriptor) => ({
     width: Math.max(size.width, descriptorPrecisionWidth(descriptor, supersample)),
     height: Math.max(size.height, descriptorPrecisionHeight(descriptor, supersample)),
   }), { width: 1, height: 1 });
 }
 
-export function assignDescriptorStorage(descriptor, contentWidth, contentHeight, guard, maxTextureSize) {
+export function assignDescriptorStorage(
+  descriptor: PatchDescriptor,
+  contentWidth: number,
+  contentHeight: number,
+  guard: number,
+  maxTextureSize: number,
+): void {
   const assignedWidth = Math.min(maxTextureSize, Math.max(1, Math.round(contentWidth)));
   const assignedHeight = Math.min(maxTextureSize, Math.max(1, Math.round(contentHeight)));
   const storageWidth = Math.min(maxTextureSize, assignedWidth + guard * 2);
@@ -363,7 +463,7 @@ export function assignDescriptorStorage(descriptor, contentWidth, contentHeight,
   );
 }
 
-function createPatchDescriptor(layout, x, y, maxTextureSize) {
+function createPatchDescriptor(layout: PatchLayout, x: number, y: number, maxTextureSize: number): PatchDescriptor {
   const uvMin = new THREE.Vector2(
     (x * layout.contentWidth) / layout.virtualWidth,
     (y * layout.contentHeight) / layout.virtualHeight,
@@ -376,7 +476,7 @@ function createPatchDescriptor(layout, x, y, maxTextureSize) {
   const angularHeightRad = Math.PI / layout.rows;
   const centerUv = new THREE.Vector2(uvMin.x + uvSize.x * 0.5, uvMin.y + uvSize.y * 0.5);
   const centerDirection = equirectDirectionFromUv(centerUv.x, centerUv.y);
-  const descriptor = {
+  const descriptor: PatchDescriptor = {
     id: `${layout.virtualWidth}x${layout.virtualHeight}:${x},${y}`,
     x,
     y,
@@ -407,6 +507,11 @@ function createPatchDescriptor(layout, x, y, maxTextureSize) {
       bucket: Math.max(layout.contentWidth, layout.contentHeight),
     },
     currentSize: {
+      width: layout.contentWidth,
+      height: layout.contentHeight,
+      bucket: Math.max(layout.contentWidth, layout.contentHeight),
+    },
+    assignedSize: {
       width: layout.contentWidth,
       height: layout.contentHeight,
       bucket: Math.max(layout.contentWidth, layout.contentHeight),
@@ -469,8 +574,8 @@ function createPatchDescriptor(layout, x, y, maxTextureSize) {
   return descriptor;
 }
 
-export function createPatchDescriptors(layout, maxTextureSize) {
-  const descriptors = [];
+export function createPatchDescriptors(layout: PatchLayout, maxTextureSize: number): PatchDescriptor[] {
+  const descriptors: PatchDescriptor[] = [];
   const horizontalWrap = layout.columns === 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
 
   for (let y = 0; y < layout.rows; y += 1) {
