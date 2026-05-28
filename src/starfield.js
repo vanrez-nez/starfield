@@ -360,6 +360,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
     getSphereSegments: () => currentSphereSegments,
     initialRadius: layerState.skyBackground.radius,
     createMaterial: createBackgroundPatchDomeMaterial,
+    geometryUvRangeForDescriptor: (descriptor) => ({
+      uvMin: descriptor.storageUvMin,
+      uvSize: descriptor.storageUvSize,
+    }),
     renderOrder: -10,
     onBlendStatsChange: () => {
       backgroundPipeline?.syncStats();

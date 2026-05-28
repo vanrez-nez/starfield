@@ -1010,6 +1010,69 @@ const PATCH_DOME_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
+const BACKGROUND_PATCH_DOME_FRAGMENT_SHADER = /* glsl */ `
+  precision highp float;
+
+  uniform sampler2D uCurrentTexture;
+  uniform sampler2D uNextTexture;
+  uniform float uBlend;
+  uniform vec2 uCurrentStorageUvMin;
+  uniform vec2 uCurrentStorageUvSize;
+  uniform vec2 uNextStorageUvMin;
+  uniform vec2 uNextStorageUvSize;
+  varying vec3 vDirection;
+
+  const float PI = 3.14159265359;
+
+  vec2 directionToEquirectUv(vec3 direction) {
+    vec3 dir = normalize(direction);
+    float u = atan(dir.x, dir.z) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
+    return vec2(u, v);
+  }
+
+  float intervalError(float value, float intervalSize) {
+    return max(max(-value, value - intervalSize), 0.0);
+  }
+
+  float storageLocalU(float skyU, float storageMinU, float storageSizeU) {
+    float d0 = skyU - storageMinU;
+    float d1 = d0 + 1.0;
+    float d2 = d0 - 1.0;
+    float e0 = intervalError(d0, storageSizeU);
+    float e1 = intervalError(d1, storageSizeU);
+    float e2 = intervalError(d2, storageSizeU);
+    float d = d0;
+    if (e1 < e0 && e1 <= e2) {
+      d = d1;
+    } else if (e2 < e0 && e2 < e1) {
+      d = d2;
+    }
+    return d / storageSizeU;
+  }
+
+  vec2 storageLocalUv(vec2 skyUv, vec2 storageUvMin, vec2 storageUvSize) {
+    return clamp(vec2(
+      storageLocalU(skyUv.x, storageUvMin.x, storageUvSize.x),
+      (skyUv.y - storageUvMin.y) / storageUvSize.y
+    ), 0.0, 1.0);
+  }
+
+  void main() {
+    vec2 skyUv = directionToEquirectUv(vDirection);
+    vec2 currentPatchUv = storageLocalUv(skyUv, uCurrentStorageUvMin, uCurrentStorageUvSize);
+    vec4 currentColor = texture2D(uCurrentTexture, currentPatchUv);
+    if (uBlend <= 0.000001) {
+      gl_FragColor = currentColor;
+      return;
+    }
+
+    vec2 nextPatchUv = storageLocalUv(skyUv, uNextStorageUvMin, uNextStorageUvSize);
+    vec4 nextColor = texture2D(uNextTexture, nextPatchUv);
+    gl_FragColor = mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0));
+  }
+`;
+
 export function createStarMaterial(uniforms) {
   return new THREE.ShaderMaterial({
     uniforms,
@@ -1123,6 +1186,8 @@ export function createBackgroundPatchDomeMaterial({ descriptor, visibleTarget })
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
     innerScale: descriptor.innerScale,
+    storageUvMin: descriptor.storageUvMin,
+    storageUvSize: descriptor.storageUvSize,
   };
 
   return new THREE.ShaderMaterial({
@@ -1136,12 +1201,16 @@ export function createBackgroundPatchDomeMaterial({ descriptor, visibleTarget })
       uCurrentInnerScale: { value: sampling.innerScale.clone() },
       uNextInnerOffset: { value: sampling.innerOffset.clone() },
       uNextInnerScale: { value: sampling.innerScale.clone() },
+      uCurrentStorageUvMin: { value: sampling.storageUvMin.clone() },
+      uCurrentStorageUvSize: { value: sampling.storageUvSize.clone() },
+      uNextStorageUvMin: { value: sampling.storageUvMin.clone() },
+      uNextStorageUvSize: { value: sampling.storageUvSize.clone() },
     },
     side: THREE.BackSide,
     transparent: false,
     depthWrite: false,
     depthTest: false,
     vertexShader: PATCH_DOME_VERTEX_SHADER,
-    fragmentShader: PATCH_DOME_FRAGMENT_SHADER,
+    fragmentShader: BACKGROUND_PATCH_DOME_FRAGMENT_SHADER,
   });
 }

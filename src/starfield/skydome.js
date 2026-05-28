@@ -18,6 +18,10 @@ export function createSkydomeManager({
   getSphereSegments,
   initialRadius = DOME_RADIUS,
   createMaterial = createPatchDomeMaterial,
+  geometryUvRangeForDescriptor = (descriptor) => ({
+    uvMin: descriptor.uvMin,
+    uvSize: descriptor.uvSize,
+  }),
   renderOrder = 0,
   onBlendStatsChange = () => {},
 }) {
@@ -29,12 +33,18 @@ export function createSkydomeManager({
   function createDomeGeometry(descriptor) {
     const sphereSegments = getSphereSegments();
     const sphereVerticalSegments = sphereVerticalSegmentsFor(sphereSegments);
-    const horizontalSegments = Math.max(3, Math.ceil(sphereSegments * Math.max(descriptor.uvSize.x, 0.001)));
-    const verticalSegments = Math.max(2, Math.ceil(sphereVerticalSegments * Math.max(descriptor.uvSize.y, 0.001)));
-    const phiStart = (descriptor.uvMin.x - 0.25) * Math.PI * 2;
-    const phiLength = descriptor.uvSize.x * Math.PI * 2;
-    const thetaStart = descriptor.uvMin.y * Math.PI;
-    const thetaLength = descriptor.uvSize.y * Math.PI;
+    const geometryUvRange = geometryUvRangeForDescriptor(descriptor);
+    const uvMin = geometryUvRange.uvMin ?? descriptor.uvMin;
+    const uvSize = geometryUvRange.uvSize ?? descriptor.uvSize;
+    const vStart = clamp(uvMin.y, 0, 1);
+    const vEnd = clamp(uvMin.y + uvSize.y, 0, 1);
+    const clampedVSize = Math.max(vEnd - vStart, 0.0001);
+    const horizontalSegments = Math.max(3, Math.ceil(sphereSegments * Math.max(uvSize.x, 0.001)));
+    const verticalSegments = Math.max(2, Math.ceil(sphereVerticalSegments * Math.max(clampedVSize, 0.001)));
+    const phiStart = (uvMin.x - 0.25) * Math.PI * 2;
+    const phiLength = uvSize.x * Math.PI * 2;
+    const thetaStart = vStart * Math.PI;
+    const thetaLength = clampedVSize * Math.PI;
 
     return new THREE.SphereGeometry(
       domeRadius,
@@ -55,6 +65,8 @@ export function createSkydomeManager({
     return target?.starfieldSampling ?? {
       innerOffset: descriptor.innerOffset,
       innerScale: descriptor.innerScale,
+      storageUvMin: descriptor.storageUvMin,
+      storageUvSize: descriptor.storageUvSize,
     };
   }
 
@@ -83,6 +95,12 @@ export function createSkydomeManager({
     descriptor.material.uniforms.uCurrentInnerScale.value.copy(currentSampling.innerScale);
     descriptor.material.uniforms.uNextInnerOffset.value.copy(nextSampling.innerOffset);
     descriptor.material.uniforms.uNextInnerScale.value.copy(nextSampling.innerScale);
+    if (descriptor.material.uniforms.uCurrentStorageUvMin) {
+      descriptor.material.uniforms.uCurrentStorageUvMin.value.copy(currentSampling.storageUvMin);
+      descriptor.material.uniforms.uCurrentStorageUvSize.value.copy(currentSampling.storageUvSize);
+      descriptor.material.uniforms.uNextStorageUvMin.value.copy(nextSampling.storageUvMin);
+      descriptor.material.uniforms.uNextStorageUvSize.value.copy(nextSampling.storageUvSize);
+    }
     descriptor.material.uniforms.uBlend.value = blend;
   }
 
