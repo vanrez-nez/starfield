@@ -9,53 +9,12 @@ import {
   PATCH_CROSSFADE_MS,
   PATCH_GUARD_TEXELS,
   PATCH_STATES,
-  REFERENCE_BAKE_WIDTH,
   STARFIELD_ALLOCATION_BUDGET_BYTES,
-  VIRTUAL_WIDTH_OPTIONS,
   equirectDirectionFromUv,
   estimateTextureBytes,
 } from "./constants.js";
 
-export function basePatchGridFor(virtualWidth) {
-  if (virtualWidth <= 4096) return 1;
-  if (virtualWidth <= 8192) return 2;
-  return 4;
-}
-
-export function createPatchLayout(virtualWidth, maxTextureSize) {
-  const virtualHeight = virtualWidth / 2;
-  let columns = basePatchGridFor(virtualWidth);
-  let rows = columns;
-  const guard = columns === 1 ? 0 : PATCH_GUARD_TEXELS;
-
-  while (columns <= virtualWidth && rows <= virtualHeight) {
-    const contentWidth = virtualWidth / columns;
-    const contentHeight = virtualHeight / rows;
-    const storageWidth = contentWidth + guard * 2;
-    const storageHeight = contentHeight + guard * 2;
-
-    if (storageWidth <= maxTextureSize && storageHeight <= maxTextureSize) {
-      return {
-        virtualWidth,
-        virtualHeight,
-        columns,
-        rows,
-        guard,
-        contentWidth,
-        contentHeight,
-        storageWidth,
-        storageHeight,
-      };
-    }
-
-    columns *= 2;
-    rows *= 2;
-  }
-
-  return null;
-}
-
-export function createPatchLayoutForGrid({
+function createPatchLayoutForGrid({
   columns,
   rows = columns,
   contentWidth,
@@ -319,24 +278,7 @@ export function createAutoPatchLayout({
   });
 }
 
-export function supportedBakeWidths(maxTextureSize) {
-  return VIRTUAL_WIDTH_OPTIONS.filter((width) => createPatchLayout(width, maxTextureSize) !== null);
-}
-
-export function defaultBakeWidth(maxTextureSize) {
-  const widths = supportedBakeWidths(maxTextureSize);
-  if (widths.includes(REFERENCE_BAKE_WIDTH)) return REFERENCE_BAKE_WIDTH;
-  return widths[widths.length - 1] || VIRTUAL_WIDTH_OPTIONS[0];
-}
-
-export function autoSupersampleForLayout(layout, maxTextureSize) {
-  const widthLimit = Math.floor(maxTextureSize / layout.storageWidth);
-  const heightLimit = Math.floor(maxTextureSize / layout.storageHeight);
-  const textureLimit = Math.min(widthLimit, heightLimit);
-  return Math.max(1, Math.min(MAX_AUTO_SUPERSAMPLE, textureLimit));
-}
-
-export function autoSupersampleForStorage(width, height, maxTextureSize) {
+function autoSupersampleForStorage(width, height, maxTextureSize) {
   const widthLimit = Math.floor(maxTextureSize / Math.max(1, width));
   const heightLimit = Math.floor(maxTextureSize / Math.max(1, height));
   const textureLimit = Math.min(widthLimit, heightLimit);
@@ -349,22 +291,6 @@ export function autoSupersampleForDescriptor(descriptor, maxTextureSize) {
     descriptor.storageSize.height,
     maxTextureSize,
   );
-}
-
-export function autoSupersampleForDescriptors(descriptors, maxTextureSize) {
-  if (descriptors.length === 0) return 1;
-  return descriptors.reduce(
-    (sample, descriptor) => Math.min(sample, autoSupersampleForDescriptor(descriptor, maxTextureSize)),
-    MAX_AUTO_SUPERSAMPLE,
-  );
-}
-
-export function precisionWidthForLayout(layout, maxTextureSize) {
-  return layout.storageWidth * autoSupersampleForLayout(layout, maxTextureSize);
-}
-
-export function precisionHeightForLayout(layout, maxTextureSize) {
-  return layout.storageHeight * autoSupersampleForLayout(layout, maxTextureSize);
 }
 
 export function patchGridLabel(layout) {
@@ -437,7 +363,7 @@ export function assignDescriptorStorage(descriptor, contentWidth, contentHeight,
   );
 }
 
-export function createPatchDescriptor(layout, x, y, maxTextureSize) {
+function createPatchDescriptor(layout, x, y, maxTextureSize) {
   const uvMin = new THREE.Vector2(
     (x * layout.contentWidth) / layout.virtualWidth,
     (y * layout.contentHeight) / layout.virtualHeight,
@@ -500,17 +426,6 @@ export function createPatchDescriptor(layout, x, y, maxTextureSize) {
       x: layout.guard,
       y: layout.guard,
     },
-    priority: 0,
-    priorityRank: 0,
-    priorityProjectedPixels: 0,
-    priorityCenterAngleRad: Math.PI,
-    priorityCenterAngleDeg: 180,
-    priorityCenterScore: 0,
-    priorityCenterWeight: 1,
-    priorityDensityImportance: 1,
-    priorityStaleWeight: 1,
-    priorityMemoryCost: 1,
-    priorityMemoryCostBytes: 0,
     state: PATCH_STATES.EMPTY,
     target: null,
     currentTarget: null,
@@ -528,15 +443,10 @@ export function createPatchDescriptor(layout, x, y, maxTextureSize) {
     brightStarCount: 0,
     brightStarPressure: 0,
     downgraded: false,
-    sparseWanted: true,
-    sparseVisible: true,
-    sparseScore: 0,
-    sparseEvicted: false,
     lastQueriedStarCount: 0,
     lastQueriedStarInstances: 0,
     lastQueriedCellCount: 0,
     lastBakeReason: "new",
-    lastBakePriority: 0,
     lastBakeDurationMs: 0,
     lastBakedLayerKey: "",
     lastBakedScreenSignature: null,

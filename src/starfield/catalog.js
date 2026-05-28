@@ -5,7 +5,6 @@ import {
   STAR_CLASSES,
   STAR_CATALOG_BASE_DENSITY,
   STAR_QUERY_EDGE_PAD_CELLS,
-  STAR_QUERY_SEAM_COPIES,
   classifyStar,
   clamp,
   emptyStarClassStats,
@@ -84,7 +83,7 @@ export function overlayCandidateStarCount({ bakeUniforms, catalogDirty, stats })
     : totalStarCount * BRIGHT_STAR_FRACTION;
 }
 
-export function starFromCell(grid, column, row, largeStarRarity = 0) {
+function starFromCell(grid, column, row, largeStarRarity = 0) {
   if (row < 0 || row >= grid.rows) return null;
 
   const wrappedColumn = wrapIndex(column, grid.columns);
@@ -306,13 +305,5 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
     classStats: finalizedClassStats,
     overlayGeometry: nextOverlayGeometry,
     overlayStars,
-  };
-}
-
-export function catalogClassStatsSummary(stats) {
-  return {
-    starCount: stats.starClassTotal,
-    starInstances: stats.bakedCandidateStarCount * STAR_QUERY_SEAM_COPIES,
-    overlayStarCount: stats.overlayStarCount,
   };
 }

@@ -207,11 +207,6 @@ function formatGpuStatsForPanel(stats) {
     `Density Fallbacks: ${stats.descriptorDensityFallbackCount ?? 0}`,
     `Bright Pressure: ${formatNumber(stats.descriptorBrightStarPressure, 4)}/px`,
     "",
-    "Priority",
-    `Highest: ${stats.highestPriorityPatch ?? "none"}`,
-    `Range: ${formatNumber(stats.lowestPriority, 1)}-${formatNumber(stats.highestPriority, 1)}`,
-    `Top: ${stats.topPrioritySummary ?? "none"}`,
-    "",
     "Allocation",
     `Automatic: yes`,
     `Allocation Budget: ${stats.allocationBudgetMemory ?? stats.patchBudgetMemory ?? "0 B"}`,
@@ -512,122 +507,13 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
       paint(nextValue);
       if (param.kind === "display") {
         starfield.setSphereSegments(nextValue);
-        return;
       }
-      if (param.kind === "layerRadius") {
-        starfield.setLayerRadius(param.layer, nextValue);
-        refreshVisibleStatsPanel();
-        return;
-      }
-      if (param.kind === "adaptive") {
-        starfield.setAdaptiveParam(param.key, nextValue);
-        return;
-      }
-      starfield.setParam(param.key, nextValue, 180);
     });
 
     top.append(label, value);
     row.append(top, input);
     rows.append(row);
     paint(Number(input.value));
-  }
-
-  function addToggleRow(param) {
-    const row = document.createElement("div");
-    row.className = "row row--toggle";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const label = document.createElement("label");
-    label.textContent = param.label;
-
-    const value = document.createElement("span");
-    value.className = "val";
-
-    const switchControl = document.createElement("div");
-    switchControl.className = "switch";
-
-    const input = document.createElement("input");
-    input.id = `control-${param.key}`;
-    input.type = "checkbox";
-    input.checked = Boolean(starfield.defaults[param.key]);
-    label.htmlFor = input.id;
-
-    if (param.kind === "layerToggle") {
-      layerToggleInputs.set(param.layer, { input, value, format: param.format });
-    }
-
-    const track = document.createElement("span");
-    track.className = "switch-track";
-
-    function paint(nextValue) {
-      value.textContent = param.format(nextValue);
-    }
-
-    input.addEventListener("change", () => {
-      paint(input.checked);
-      if (param.kind === "layerToggle") {
-        starfield.setLayerEnabled(param.layer, input.checked);
-        if (param.layer === "brightOverlay") {
-          setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
-        }
-        refreshVisibleStatsPanel({ force: true });
-        return;
-      }
-      starfield.setAdaptiveParam(param.key, input.checked);
-    });
-    switchControl.addEventListener("click", (event) => {
-      if (event.target === input) return;
-      input.checked = !input.checked;
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    top.append(label, value);
-    switchControl.append(input, track);
-    row.append(top, switchControl);
-    rows.append(row);
-    paint(input.checked);
-  }
-
-  function addSelectRow(param) {
-    const row = document.createElement("div");
-    row.className = "row row--select";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const label = document.createElement("label");
-    label.textContent = param.label;
-
-    const value = document.createElement("span");
-    value.className = "val";
-
-    const select = document.createElement("select");
-    select.id = `control-${param.key}`;
-    label.htmlFor = select.id;
-
-    param.options.forEach((option) => {
-      const optionElement = document.createElement("option");
-      optionElement.value = option.value;
-      optionElement.textContent = option.label;
-      optionElement.selected = option.value === starfield.defaults[param.key];
-      select.append(optionElement);
-    });
-
-    function paint(nextValue) {
-      value.textContent = param.format(nextValue);
-    }
-
-    select.addEventListener("change", () => {
-      paint(select.value);
-      starfield.setAdaptiveParam(param.key, select.value);
-    });
-
-    top.append(label, value);
-    row.append(top, select);
-    rows.append(row);
-    paint(select.value);
   }
 
   function addLayerToggleRow(parent, layer, control) {
@@ -819,16 +705,6 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
 
       if (param.kind === "layerTabs") {
         addLayerTabs();
-        return;
-      }
-
-      if (param.kind === "adaptiveToggle" || param.kind === "layerToggle") {
-        addToggleRow(param);
-        return;
-      }
-
-      if (param.kind === "adaptiveSelect") {
-        addSelectRow(param);
         return;
       }
 

@@ -5,7 +5,6 @@ import {
   BRIGHT_STAR_OVERLAY_ENABLED,
   CAMERA_BAKE_IDLE_MS,
   CATALOG_PARAMS,
-  DEFAULT_ADAPTIVE_QUALITY,
   DEFAULT_BAKED_STAR_RADIUS,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
   DEFAULT_EFFECT_MAX_SIZE,
@@ -18,15 +17,12 @@ import {
   DEFAULT_WINKLE_SHARPNESS,
   DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
-  FINAL_TEXTURE_BYTES_PER_PIXEL,
   LIGHT_COMPOSITION_MAX_ANCHORS,
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
-  SPARSE_PATCH_MODES,
   STARFIELD_ALLOCATION_BUDGET_BYTES,
   STAR_QUERY_SEAM_COPIES,
   estimateTextureBytes,
-  formatBytes,
   screenPixelAngleFromInfo,
   sizeLabel,
 } from "./starfield/constants.js";
@@ -166,7 +162,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     accumulationType,
     residentLayerCount: 2,
   });
-  const initialBakeWidth = defaultPatchLayout.virtualWidth;
   const defaultStarParams = {
     uDensity: 360,
     uStarSize: 5,
@@ -188,7 +183,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
   };
   const defaults = {
     ...defaultStarParams,
-    bakeWidth: initialBakeWidth,
     sphereSegments: 32,
     skyBackgroundEnabled: true,
     skyBackgroundRadius: DEFAULT_SKY_BACKGROUND_RADIUS,
@@ -202,7 +196,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uWinkleSharpness: DEFAULT_WINKLE_SHARPNESS,
     uWinkleFlashiness: DEFAULT_WINKLE_FLASHINESS,
     backgroundParams: defaultBackgroundParams,
-    ...DEFAULT_ADAPTIVE_QUALITY,
   };
 
   let currentSphereSegments = defaults.sphereSegments;
@@ -235,7 +228,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
       },
     },
   };
-  const adaptiveQuality = { ...DEFAULT_ADAPTIVE_QUALITY, adaptiveResolution: true };
   const stats = createInitialStats({
     defaults,
     defaultPatchLayout,
@@ -345,7 +337,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
   downsampleQuad.frustumCulled = false;
   downsampleScene.add(downsampleQuad);
 
-  let currentBakeWidth = defaults.bakeWidth;
   let currentPatchLayout = defaultPatchLayout;
   let currentSupersample = currentPatchLayout.supersample;
   let patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
@@ -391,7 +382,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     downsampleScene,
     downsampleUniforms,
     bakeUniforms,
-    adaptiveQuality,
     maxTextureSize,
     stats,
     skydome,
@@ -469,10 +459,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function makeStatsContext() {
     return {
-      adaptiveQuality,
       currentCameraInfo,
       currentPatchLayout,
-      currentBakeWidth,
       currentSupersample,
       patchDescriptors,
       maxTextureSize,
@@ -489,7 +477,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
       residentLayerCount: 2,
       bakeScratchBytes: currentBakeScratchBytes(),
       queueState: pipeline.queueState(),
-      activeSparseMode,
       activeBlendCount: skydome.activeBlendCount + backgroundSkydome.activeBlendCount,
       setCameraInfo,
       syncOverlayStats,
@@ -502,10 +489,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function notifyReadouts() {
     readoutsChangeHandler(getReadouts());
-  }
-
-  function supportedWidths() {
-    return [currentBakeWidth];
   }
 
   function roundedNumber(value, digits = 4) {
@@ -780,19 +763,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return patchDescriptorSummaryFromStats(makeStatsContext());
   }
 
-  function activeSparseMode() {
-    return SPARSE_PATCH_MODES.FULL;
-  }
-
-  function descriptorTextureBytes(descriptor) {
-    const storageSize = plannedDescriptorStorageSize(descriptor);
-    return estimateTextureBytes(
-      storageSize.width,
-      storageSize.height,
-      FINAL_TEXTURE_BYTES_PER_PIXEL,
-    );
-  }
-
   function autoVirtualSizeLabel() {
     const targetWidth = patchDescriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.targetSize.width), 1);
     const targetHeight = patchDescriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.targetSize.height), 1);
@@ -805,178 +775,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return sizeLabel(targetWidth, targetHeight);
   }
 
-  function descriptorVisibleInCamera(descriptor) {
-    const horizontalFovRad = THREE.MathUtils.degToRad(Math.max(Number(currentCameraInfo.horizontalFov) || 0, 0.001));
-    const verticalFovRad = THREE.MathUtils.degToRad(Math.max(Number(currentCameraInfo.verticalFov) || 0, 0.001));
-    const halfViewDiagonal = Math.hypot(horizontalFovRad, verticalFovRad) * 0.5;
-    const patchRadius = Math.hypot(descriptor.angularWidthRad, descriptor.angularHeightRad) * 0.5;
-    return descriptor.priorityCenterAngleRad <= halfViewDiagonal + patchRadius;
-  }
-
-  function sparseScoreForDescriptor(descriptor, mode) {
-    const basePriority = descriptor.priority / Math.max(descriptor.priorityStaleWeight, 0.001);
-    if (mode === SPARSE_PATCH_MODES.VISIBLE) {
-      return descriptor.sparseVisible ? basePriority : -1;
-    }
-    if (mode === SPARSE_PATCH_MODES.CENTER) {
-      return basePriority * (0.5 + descriptor.priorityCenterWeight);
-    }
-    if (mode === SPARSE_PATCH_MODES.DENSITY) {
-      const densityRelief = Math.max(0.2, descriptor.densityScale);
-      const brightImportance = 1 + Math.min(3, descriptor.brightStarPressure * 8192);
-      return basePriority * densityRelief * brightImportance;
-    }
-    return basePriority;
-  }
-
-  function releaseDescriptorTargetsToPool(descriptor) {
-    const targets = new Set([
-      descriptor.currentTarget,
-      descriptor.nextTarget,
-      descriptor.target,
-      descriptor.blendFromTarget,
-      descriptor.blendToTarget,
-    ].filter(Boolean));
-
-    targets.forEach((target) => targetManager.releaseTarget(target));
-  }
-
-  function evictDescriptorToSparseFallback(descriptor) {
-    if (descriptor.state === PATCH_STATES.BAKING || pipeline.activeBakeJob?.patchId === descriptor.id) return false;
-
-    pipeline.removeQueuedBakeJobForDescriptor(descriptor);
-    releaseDescriptorTargetsToPool(descriptor);
-    skydome.bindDescriptorFallback(descriptor);
-    descriptor.sparseEvicted = true;
-    return true;
-  }
-
-  function sparseSelectionForCurrentPriorities() {
-    const mode = activeSparseMode();
-    const patchBudgetBytes = STARFIELD_ALLOCATION_BUDGET_BYTES;
-    const sorted = [...patchDescriptors]
-      .map((descriptor) => {
-        descriptor.sparseVisible = descriptorVisibleInCamera(descriptor);
-        descriptor.sparseScore = sparseScoreForDescriptor(descriptor, mode);
-        return descriptor;
-      })
-      .sort((a, b) => (b.sparseScore - a.sparseScore) || a.id.localeCompare(b.id));
-
-    if (mode === SPARSE_PATCH_MODES.FULL) {
-      return {
-        mode,
-        wanted: new Set(patchDescriptors),
-        budgetBytes: patchBudgetBytes,
-        budgetUsedBytes: patchDescriptors.reduce((bytes, descriptor) => bytes + descriptorTextureBytes(descriptor), 0),
-        visibleCount: patchDescriptors.filter((descriptor) => descriptor.sparseVisible).length,
-        summary: "full-grid",
-      };
-    }
-
-    const primaryCandidates = mode === SPARSE_PATCH_MODES.VISIBLE
-      ? sorted.filter((descriptor) => descriptor.sparseVisible)
-      : sorted;
-    const candidates = primaryCandidates.length > 0 ? primaryCandidates : sorted;
-    const wanted = new Set();
-    let budgetUsedBytes = 0;
-
-    for (const descriptor of candidates) {
-      if (descriptor.sparseScore < 0 && wanted.size > 0) continue;
-
-      const cost = descriptorTextureBytes(descriptor);
-      if (wanted.size > 0 && budgetUsedBytes + cost > patchBudgetBytes) continue;
-
-      wanted.add(descriptor);
-      budgetUsedBytes += cost;
-    }
-
-    if (wanted.size === 0 && sorted.length > 0) {
-      const descriptor = sorted[0];
-      const cost = descriptorTextureBytes(descriptor);
-      if (cost <= patchBudgetBytes) {
-        wanted.add(descriptor);
-        budgetUsedBytes += cost;
-      }
-    }
-
-    const summary = [...wanted]
-      .sort((a, b) => b.sparseScore - a.sparseScore)
-      .slice(0, 5)
-      .map((descriptor) => `${descriptor.id}:${descriptor.sparseScore.toFixed(1)}`)
-      .join(", ") || "none";
-
-    return {
-      mode,
-      wanted,
-      budgetBytes: patchBudgetBytes,
-      budgetUsedBytes,
-      visibleCount: patchDescriptors.filter((descriptor) => descriptor.sparseVisible).length,
-      summary,
-    };
-  }
-
-  function applySparseResidency() {
-    const selection = sparseSelectionForCurrentPriorities();
-    let changed = false;
-    let queuedSparseBake = false;
-
-    patchDescriptors.forEach((descriptor) => {
-      const wanted = selection.wanted.has(descriptor);
-      descriptor.sparseWanted = wanted;
-      descriptor.sparseEvicted = !wanted;
-
-      if (wanted) {
-        if (descriptor.fallbackState === FALLBACK_STATES.SPARSE && descriptor.allocationState === ALLOCATION_STATES.UNALLOCATED) {
-          descriptor.state = PATCH_STATES.EMPTY;
-        }
-        if (selection.mode !== SPARSE_PATCH_MODES.FULL && descriptor.allocationState === ALLOCATION_STATES.UNALLOCATED) {
-          queuedSparseBake = pipeline.queueSparseBakeForDescriptor(descriptor) || queuedSparseBake;
-        }
-        return;
-      }
-
-      if (
-        descriptor.currentTarget
-        || descriptor.nextTarget
-        || descriptor.target
-        || descriptor.blendFromTarget
-        || descriptor.blendToTarget
-        || descriptor.allocationState !== ALLOCATION_STATES.UNALLOCATED
-      ) {
-        changed = evictDescriptorToSparseFallback(descriptor) || changed;
-      } else {
-        skydome.bindDescriptorFallback(descriptor);
-      }
-    });
-
-    if (queuedSparseBake) {
-      pipeline.sortBakeQueue();
-      pipeline.requestBakeQueueProcessing();
-    }
-    pipeline.syncBakeQueueStats();
-    stats.sparseMode = adaptiveQuality.sparseMode;
-    stats.effectiveSparseMode = selection.mode;
-    stats.sparseWantedPatchCount = selection.wanted.size;
-    stats.sparseResidentPatchCount = patchDescriptors.filter((descriptor) => descriptor.sparseWanted && descriptor.allocationState === ALLOCATION_STATES.ALLOCATED).length;
-    stats.sparseEvictedPatchCount = patchDescriptors.filter((descriptor) => descriptor.sparseEvicted).length;
-    stats.sparseFallbackPatchCount = patchDescriptors.filter((descriptor) => descriptor.fallbackState === FALLBACK_STATES.SPARSE).length;
-    stats.sparseVisiblePatchCount = selection.visibleCount;
-    stats.sparseBudgetUsedBytes = selection.budgetUsedBytes;
-    stats.sparseBudgetUsedMemory = formatBytes(selection.budgetUsedBytes);
-    stats.sparseBudgetRatio = selection.budgetUsedBytes / selection.budgetBytes;
-    stats.sparseBudgetExceeded = selection.budgetUsedBytes > selection.budgetBytes;
-    stats.sparseSelectionSummary = selection.summary;
-
-    if (changed) {
-      requestRender();
-    }
-  }
-
   function updateDemandStats() {
     const demand = computeDemandReadouts();
     updatePatchDescriptorDemand(demand);
     currentSupersample = currentPatchLayout.supersample ?? 1;
-    applySparseResidency();
     Object.assign(stats, demand, computeMemoryReadouts(demand), patchDescriptorSummary());
   }
 
@@ -990,7 +792,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     const changedDescriptors = [];
 
     patchDescriptors.forEach((descriptor) => {
-      if (!descriptor.sparseWanted) return;
       if (descriptor.state !== PATCH_STATES.RESIDENT && descriptor.state !== PATCH_STATES.STALE) return;
 
       const layerKey = desiredLayerBakeKey(descriptor, signature);
@@ -1052,7 +853,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     pipeline.clearBakeQueue();
     backgroundPipeline.clearBakeQueue();
     currentPatchLayout = nextLayout;
-    currentBakeWidth = nextLayout.virtualWidth;
     patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
     backgroundPatchDescriptors = createBackgroundPatchDescriptors(currentPatchLayout);
     currentSupersample = currentPatchLayout.supersample ?? 1;
@@ -1100,7 +900,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function disposePatchDescriptors(descriptors, { releaseTargets = true, skydomeManager = skydome } = {}) {
     descriptors.forEach((descriptor) => {
-      descriptor.state = PATCH_STATES.EVICTING;
       const targets = new Set([
         descriptor.currentTarget,
         descriptor.nextTarget,
@@ -1123,14 +922,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
       descriptor.allocationState = ALLOCATION_STATES.UNALLOCATED;
       skydomeManager.clearBlendForDescriptor(descriptor);
     });
-  }
-
-  function setBakeWidth(width) {
-    scheduleAutomaticPatchLayout("compat", 0);
-  }
-
-  function setParam(key, value, delay = 180) {
-    setLayerParam("bakedStars", key, value, delay);
   }
 
   function setLayerParamValue(layerId, key, value) {
@@ -1203,11 +994,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     const nextSeed = Math.floor(Math.random() * 1001);
     setLayerParam(layerId, "uSeed", nextSeed, 0);
     return nextSeed;
-  }
-
-  function setAdaptiveParam(key, value) {
-    if (!(key in adaptiveQuality)) return;
-    notifyReadouts();
   }
 
   function setSphereSegments(value) {
@@ -1292,8 +1078,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     const descriptors = patchDescriptorSummary();
     const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
     return {
-      bakeWidth: currentBakeWidth,
-      supportedBakeWidths: supportedWidths(),
       virtualSize: autoVirtualSizeLabel(),
       autoLayoutReason: currentPatchLayout.autoLayoutReason ?? stats.autoLayoutReason ?? "automatic",
       patchGrid: patchGridLabel(currentPatchLayout),
@@ -1301,7 +1085,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
       supersample: `${currentSupersample}x`,
       internalPatchSize: sizeLabel(precisionSize.width, precisionSize.height),
       gpuLimit: `${maxTextureSize}`,
-      adaptive: { ...adaptiveQuality },
       demand,
       memory,
       descriptors,
@@ -1413,10 +1196,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   return {
     defaults,
-    getSupportedBakeWidths: supportedWidths,
     getReadouts,
-    setParam,
-    setAdaptiveParam,
     setSphereSegments,
     setLayerEnabled,
     getLayerEnabled,
@@ -1427,7 +1207,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     reseedLayer,
     setBrightStarOverlayEnabled,
     getBrightStarOverlayEnabled,
-    setBakeWidth,
     reseed,
     bakeNow,
     scheduleBake,

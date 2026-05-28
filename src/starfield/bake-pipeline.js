@@ -1,13 +1,10 @@
 import * as THREE from "three";
 import {
   CAMERA_BAKE_IDLE_MS,
-  CAMERA_MOTION_EPSILON_DEG,
-  CAMERA_REQUEUE_ANGLE_DEG,
   ALLOCATION_STATES,
   FALLBACK_STATES,
   MAX_BAKE_JOBS_PER_FRAME,
   PATCH_STATES,
-  cameraForwardFromInfo,
   screenPixelAngleFromInfo,
 } from "./constants.js";
 import {
@@ -23,7 +20,6 @@ export function createBakePipeline({
   downsampleScene,
   downsampleUniforms,
   bakeUniforms,
-  adaptiveQuality,
   maxTextureSize,
   stats,
   skydome,
@@ -50,17 +46,12 @@ export function createBakePipeline({
 }) {
   const bakeJobQueue = [];
   const queuedBakeJobsByPatchId = new Map();
-  const lastObservedCameraForward = new THREE.Vector3(0, 0, -1);
-  const lastQueuedCameraForward = new THREE.Vector3(0, 0, -1);
   let activeBakeJob = null;
   let completedBakeJobs = 0;
   let totalQueuedBakeJobs = 0;
   let bakeQueueFrameRequested = false;
-  let bakeQueueTimer = 0;
   let bakeTimer = 0;
-  let cameraBakeTimer = 0;
   let layerBakeTimer = 0;
-  let lastCameraMotionAt = 0;
 
   function queueState() {
     return {
@@ -99,24 +90,12 @@ export function createBakePipeline({
   function jobForDescriptor(descriptor, reason) {
     return {
       patchId: descriptor.id,
-      targetSize: {
-        width: descriptor.targetSize.width,
-        height: descriptor.targetSize.height,
-        bucket: descriptor.targetSize.bucket,
-      },
-      priority: descriptor.priority,
       reason: reasonForDescriptor(descriptor, reason),
     };
   }
 
-  function sortBakeQueue() {
-    bakeJobQueue.sort((a, b) => b.priority - a.priority);
-  }
-
   function enqueueBakeJobs(descriptors, reason = "upgrade", { replace = false } = {}) {
     if (replace) {
-      clearTimeout(bakeQueueTimer);
-      bakeQueueTimer = 0;
       bakeJobQueue.length = 0;
       queuedBakeJobsByPatchId.clear();
       completedBakeJobs = 0;
@@ -125,7 +104,6 @@ export function createBakePipeline({
 
     updateDemandStats();
     descriptors.forEach((descriptor) => {
-      if (!descriptor.sparseWanted) return;
       if (activeBakeJob?.patchId === descriptor.id) return;
 
       const job = jobForDescriptor(descriptor, reason);
@@ -143,92 +121,29 @@ export function createBakePipeline({
       }
     });
 
-    sortBakeQueue();
     syncBakeQueueStats();
     updateDemandStats();
   }
 
   function clearBakeQueue() {
     clearTimeout(bakeTimer);
-    clearTimeout(bakeQueueTimer);
-    clearTimeout(cameraBakeTimer);
     clearTimeout(layerBakeTimer);
     bakeJobQueue.length = 0;
     queuedBakeJobsByPatchId.clear();
     activeBakeJob = null;
-    bakeQueueTimer = 0;
-    cameraBakeTimer = 0;
     layerBakeTimer = 0;
     bakeQueueFrameRequested = false;
     syncBakeQueueStats();
   }
 
-  function scheduleBakeQueueProcessingAfter(delay) {
-    clearTimeout(bakeQueueTimer);
-    bakeQueueTimer = window.setTimeout(() => {
-      bakeQueueTimer = 0;
-      requestBakeQueueProcessing();
-    }, Math.max(0, delay));
-  }
-
   function requestBakeQueueProcessing() {
-    if (bakeQueueFrameRequested || bakeQueueTimer || bakeJobQueue.length === 0) {
+    if (bakeQueueFrameRequested || bakeJobQueue.length === 0) {
       syncBakeQueueStats();
       return;
     }
 
     bakeQueueFrameRequested = true;
     requestAnimationFrame(processBakeQueueFrame);
-  }
-
-  function currentCameraForwardVector() {
-    const forward = cameraForwardFromInfo(getCurrentCameraInfo());
-    return new THREE.Vector3(forward.x, forward.y, forward.z);
-  }
-
-  function noteCameraMotion() {
-    const forward = currentCameraForwardVector();
-    const threshold = Math.cos(THREE.MathUtils.degToRad(CAMERA_MOTION_EPSILON_DEG));
-    if (forward.dot(lastObservedCameraForward) < threshold) {
-      lastObservedCameraForward.copy(forward);
-      lastCameraMotionAt = performance.now();
-    }
-  }
-
-  function remainingCameraIdleDelay() {
-    if (!adaptiveQuality.adaptiveResolution || lastCameraMotionAt <= 0) return 0;
-    return Math.max(0, CAMERA_BAKE_IDLE_MS - (performance.now() - lastCameraMotionAt));
-  }
-
-  function scheduleCameraBakeJobs() {
-    clearTimeout(cameraBakeTimer);
-    cameraBakeTimer = window.setTimeout(() => {
-      cameraBakeTimer = 0;
-      if (!adaptiveQuality.adaptiveResolution) return;
-
-      const forward = currentCameraForwardVector();
-      const threshold = Math.cos(THREE.MathUtils.degToRad(CAMERA_REQUEUE_ANGLE_DEG));
-      if (forward.dot(lastQueuedCameraForward) > threshold) return;
-
-      lastQueuedCameraForward.copy(forward);
-      enqueueBakeJobs(getPatchDescriptors(), "camera");
-      requestBakeQueueProcessing();
-    }, CAMERA_BAKE_IDLE_MS);
-  }
-
-  function maybeEnqueueCameraBakeJobs() {
-    if (!adaptiveQuality.adaptiveResolution) return;
-
-    const forward = currentCameraForwardVector();
-    const threshold = Math.cos(THREE.MathUtils.degToRad(CAMERA_REQUEUE_ANGLE_DEG));
-    if (forward.dot(lastQueuedCameraForward) > threshold) return;
-
-    lastCameraMotionAt = performance.now();
-    scheduleCameraBakeJobs();
-  }
-
-  function markCurrentCameraQueued() {
-    lastQueuedCameraForward.copy(currentCameraForwardVector());
   }
 
   function ensureSupersampleTargetSize(width, height) {
@@ -308,7 +223,7 @@ export function createBakePipeline({
       if (descriptor.state === PATCH_STATES.RESIDENT) {
         descriptor.state = PATCH_STATES.STALE;
       }
-      if (descriptor.state !== PATCH_STATES.EMPTY && descriptor.state !== PATCH_STATES.EVICTING) {
+      if (descriptor.state !== PATCH_STATES.EMPTY) {
         descriptor.layerDirty = true;
         descriptor.layerDirtyReason = reason;
       }
@@ -339,22 +254,13 @@ export function createBakePipeline({
       return;
     }
 
-    const cameraIdleDelay = remainingCameraIdleDelay();
-    if (cameraIdleDelay > 0) {
-      syncBakeQueueStats();
-      scheduleBakeQueueProcessingAfter(cameraIdleDelay);
-      return;
-    }
-
     const bakeStart = performance.now();
     const previousTarget = renderer.getRenderTarget();
     const previousAutoClear = renderer.autoClear;
     const previousClearColor = new THREE.Color();
     renderer.getClearColor(previousClearColor);
     const previousClearAlpha = renderer.getClearAlpha();
-    const jobsThisFrame = adaptiveQuality.adaptiveResolution
-      ? MAX_BAKE_JOBS_PER_FRAME
-      : Math.max(1, bakeJobQueue.length);
+    const jobsThisFrame = MAX_BAKE_JOBS_PER_FRAME;
     let completedThisFrame = 0;
 
     setCurrentSupersample(getCurrentPatchLayout().supersample ?? getCurrentSupersample());
@@ -382,7 +288,6 @@ export function createBakePipeline({
       skydome.promoteDescriptorBakeTarget(descriptor, bakeTarget);
       onDescriptorBaked(descriptor, bakeTarget);
       descriptor.lastBakeReason = job.reason;
-      descriptor.lastBakePriority = job.priority;
       descriptor.lastBakeDurationMs = Number((performance.now() - patchStart).toFixed(2));
       descriptor.state = PATCH_STATES.RESIDENT;
       activeBakeJob = null;
@@ -412,11 +317,8 @@ export function createBakePipeline({
 
   function bakeNow() {
     clearTimeout(bakeTimer);
-    clearTimeout(cameraBakeTimer);
     clearTimeout(layerBakeTimer);
-    cameraBakeTimer = 0;
     layerBakeTimer = 0;
-    lastQueuedCameraForward.copy(currentCameraForwardVector());
     completedBakeJobs = 0;
     totalQueuedBakeJobs = 0;
     markPatchDescriptorsQueued();
@@ -427,29 +329,6 @@ export function createBakePipeline({
   function scheduleBake(delay = 180) {
     clearTimeout(bakeTimer);
     bakeTimer = window.setTimeout(bakeNow, delay);
-  }
-
-  function removeQueuedBakeJobForDescriptor(descriptor) {
-    const job = queuedBakeJobsByPatchId.get(descriptor.id);
-    if (!job) return;
-
-    queuedBakeJobsByPatchId.delete(descriptor.id);
-    const index = bakeJobQueue.indexOf(job);
-    if (index >= 0) bakeJobQueue.splice(index, 1);
-  }
-
-  function queueSparseBakeForDescriptor(descriptor) {
-    if (!descriptor.sparseWanted) return false;
-    if (activeBakeJob?.patchId === descriptor.id) return false;
-    if (queuedBakeJobsByPatchId.has(descriptor.id)) return false;
-    if (descriptor.state !== PATCH_STATES.EMPTY && descriptor.state !== PATCH_STATES.STALE) return false;
-
-    const job = jobForDescriptor(descriptor, "sparse");
-    bakeJobQueue.push(job);
-    queuedBakeJobsByPatchId.set(descriptor.id, job);
-    totalQueuedBakeJobs += 1;
-    descriptor.state = PATCH_STATES.QUEUED;
-    return true;
   }
 
   function dispose() {
@@ -466,16 +345,8 @@ export function createBakePipeline({
     enqueueBakeJobs,
     clearBakeQueue,
     requestBakeQueueProcessing,
-    noteCameraMotion,
-    maybeEnqueueCameraBakeJobs,
-    currentCameraForwardVector,
-    markCurrentCameraQueued,
     markPatchDescriptorsStale,
     scheduleLayerBakeJobs,
-    ensureSupersampleTargetSize,
-    sortBakeQueue,
-    removeQueuedBakeJobForDescriptor,
-    queueSparseBakeForDescriptor,
     bakeNow,
     scheduleBake,
     dispose,

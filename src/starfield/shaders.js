@@ -685,36 +685,21 @@ const DOWNSAMPLE_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
-const SKY_BACKGROUND_VERTEX_SHADER = /* glsl */ `
-  varying vec3 vDirection;
-  varying vec2 vUv;
-
-  void main() {
-    vDirection = position;
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
 const LIGHT_COMPOSITION_BAKE_VERTEX_SHADER = /* glsl */ `
-  varying vec3 vDirection;
   varying vec2 vUv;
 
   void main() {
-    vDirection = vec3(0.0, 0.0, 1.0);
     vUv = position.xy * 0.5 + 0.5;
     gl_Position = vec4(position.xy, 0.0, 1.0);
   }
 `;
 
-const SKY_BACKGROUND_FRAGMENT_SHADER = /* glsl */ `
+const LIGHT_COMPOSITION_BAKE_FRAGMENT_SHADER = /* glsl */ `
   #define MAX_ANCHORS ${LIGHT_COMPOSITION_MAX_ANCHORS}
   precision highp float;
 
-  varying vec3 vDirection;
   varying vec2 vUv;
 
-  uniform int uUseTileUv;
   uniform vec2 uTileUvMin;
   uniform vec2 uTileUvSize;
   uniform int uAnchorCount;
@@ -952,7 +937,7 @@ const SKY_BACKGROUND_FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     vec2 skyUv = uTileUvMin + vUv * uTileUvSize;
-    vec3 dir = uUseTileUv == 1 ? equirectDirectionFromUv(skyUv) : normalize(vDirection);
+    vec3 dir = equirectDirectionFromUv(skyUv);
     vec4 nebula = lightCompositionNebula(dir);
     vec3 baseLinear = vec3(0.004, 0.005, 0.011);
     vec3 colorLinear = baseLinear + nebula.rgb * clamp(nebula.a, 0.0, 1.0) * max(uNebulaStrength, 0.0);
@@ -1121,30 +1106,13 @@ export function createDownsampleMaterial(uniforms) {
   });
 }
 
-export function createSkyBackgroundMaterial(uniforms) {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      ...uniforms,
-      uUseTileUv: { value: 0 },
-    },
-    side: THREE.BackSide,
-    depthWrite: false,
-    depthTest: false,
-    vertexShader: SKY_BACKGROUND_VERTEX_SHADER,
-    fragmentShader: SKY_BACKGROUND_FRAGMENT_SHADER,
-  });
-}
-
 export function createLightCompositionBakeMaterial(uniforms) {
   return new THREE.ShaderMaterial({
-    uniforms: {
-      ...uniforms,
-      uUseTileUv: { value: 1 },
-    },
+    uniforms,
     depthWrite: false,
     depthTest: false,
     vertexShader: LIGHT_COMPOSITION_BAKE_VERTEX_SHADER,
-    fragmentShader: SKY_BACKGROUND_FRAGMENT_SHADER,
+    fragmentShader: LIGHT_COMPOSITION_BAKE_FRAGMENT_SHADER,
   });
 }
 

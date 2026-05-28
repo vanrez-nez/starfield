@@ -4,9 +4,8 @@ export const DOME_RADIUS = 10;
 export const REFERENCE_BAKE_WIDTH = 4096;
 export const REFERENCE_BAKE_HEIGHT = REFERENCE_BAKE_WIDTH / 2;
 export const MAX_AUTO_SUPERSAMPLE = 8;
-export const VIRTUAL_WIDTH_OPTIONS = [1024, 2048, 4096, 8192, 16384];
 export const STARFIELD_ALLOCATION_BUDGET_MIB = 512;
-export const BYTES_PER_MIB = 1024 * 1024;
+const BYTES_PER_MIB = 1024 * 1024;
 export const STARFIELD_ALLOCATION_BUDGET_BYTES = STARFIELD_ALLOCATION_BUDGET_MIB * BYTES_PER_MIB;
 export const PATCH_SIZE_ALIGNMENT = 128;
 export const PATCH_GUARD_TEXELS = 64;
@@ -25,7 +24,7 @@ export const DEFAULT_LARGE_STAR_RARITY = 0.5;
 export const BRIGHT_STAR_OVERLAY_ENABLED = true;
 export const BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS = false;
 export const BRIGHT_STAR_OVERLAY_STRENGTH = 0.38;
-export const BRIGHT_STAR_OVERLAY_RADIUS_SCALE = 0.985;
+const BRIGHT_STAR_OVERLAY_RADIUS_SCALE = 0.985;
 export const WINKLE_MAX_COUNT = 128;
 export const DEFAULT_WINKLE_AMOUNT = 0;
 export const DEFAULT_WINKLE_SHARPNESS = 0.65;
@@ -71,16 +70,12 @@ export const DEFAULT_FIELD_GRADIENT = Object.freeze({
   ],
 });
 export const MAX_BAKE_JOBS_PER_FRAME = 1;
-export const CAMERA_REQUEUE_ANGLE_DEG = 8;
-export const CAMERA_MOTION_EPSILON_DEG = 0.05;
 export const CAMERA_BAKE_IDLE_MS = 450;
 export const PATCH_CROSSFADE_MS = 260;
 export const CATALOG_PARAMS = new Set(["uDensity", "uSeed"]);
-export const TEXELS_PER_PIXEL_TARGET = 1;
 export const DENSITY_FALLBACK_STARS_PER_PIXEL = 0.25;
 export const BRIGHT_STAR_FRACTION = 0.1;
 export const AUTO_PATCH_GRIDS = [1, 2, 4, 8, 16];
-export const PATCH_SIZE_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 export const BASE_TARGET_POOL_BUCKETS = [128, 256, 512, 1024, 2048, 4096];
 export const FINAL_TEXTURE_BYTES_PER_PIXEL = 4;
 
@@ -91,26 +86,9 @@ export const STAR_CLASSES = Object.freeze({
   HERO: 3,
 });
 
-export const STAR_CLASS_NAMES = Object.freeze(["tiny", "normal", "bright", "hero"]);
+const STAR_CLASS_NAMES = Object.freeze(["tiny", "normal", "bright", "hero"]);
 export const STAR_QUERY_EDGE_PAD_CELLS = 2;
 export const STAR_QUERY_SEAM_COPIES = 3;
-
-export const SPARSE_PATCH_MODES = Object.freeze({
-  FULL: "full",
-  VISIBLE: "visible",
-  CENTER: "center",
-  DENSITY: "density",
-});
-
-export const DEFAULT_ADAPTIVE_QUALITY = Object.freeze({
-  adaptiveResolution: true,
-  targetTexelsPerPixel: TEXELS_PER_PIXEL_TARGET,
-  minPatchSize: 1,
-  maxPatchSize: PATCH_SIZE_BUCKETS[PATCH_SIZE_BUCKETS.length - 1],
-  patchBudgetMb: STARFIELD_ALLOCATION_BUDGET_MIB,
-  centerBias: 0,
-  sparseMode: SPARSE_PATCH_MODES.FULL,
-});
 
 export const PATCH_STATES = Object.freeze({
   EMPTY: "empty",
@@ -118,7 +96,6 @@ export const PATCH_STATES = Object.freeze({
   BAKING: "baking",
   RESIDENT: "resident",
   STALE: "stale",
-  EVICTING: "evicting",
 });
 
 export const ALLOCATION_STATES = Object.freeze({
@@ -128,10 +105,8 @@ export const ALLOCATION_STATES = Object.freeze({
 
 export const FALLBACK_STATES = Object.freeze({
   EMPTY: "empty",
-  CURRENT: "current",
   NEXT: "next",
   RESIDENT: "resident",
-  SPARSE: "sparse",
 });
 
 export function sphereVerticalSegmentsFor(horizontalSegments) {
@@ -155,54 +130,6 @@ export function estimateTextureBytes(width, height, bytesPerPixel) {
 export function clamp(value, min, max) {
   const numeric = Number.isFinite(value) ? value : min;
   return Math.min(max, Math.max(min, numeric));
-}
-
-export function bucketForDemand(texels, minSize, maxSize, maxTextureSize) {
-  const boundedMin = Math.min(maxTextureSize, Math.max(1, minSize));
-  const boundedMax = Math.max(boundedMin, Math.min(maxTextureSize, maxSize, PATCH_SIZE_BUCKETS[PATCH_SIZE_BUCKETS.length - 1]));
-  const boundedTexels = clamp(texels, boundedMin, boundedMax);
-
-  for (const bucket of PATCH_SIZE_BUCKETS) {
-    if (bucket >= boundedTexels) return Math.min(bucket, boundedMax);
-  }
-
-  return boundedMax;
-}
-
-export function requiredPatchBucket({
-  patchAngularWidthRad,
-  patchAngularHeightRad,
-  screenWidth,
-  screenHeight,
-  horizontalFovRad,
-  verticalFovRad,
-  texelsPerPixel,
-  minSize,
-  maxSize,
-  maxTextureSize,
-}) {
-  const pixelsPerRadianX = screenWidth / Math.max(horizontalFovRad, 1e-6);
-  const pixelsPerRadianY = screenHeight / Math.max(verticalFovRad, 1e-6);
-  const projectedWidthPixels = patchAngularWidthRad * pixelsPerRadianX;
-  const projectedHeightPixels = patchAngularHeightRad * pixelsPerRadianY;
-  const projectedPixels = Math.max(1, projectedWidthPixels * projectedHeightPixels);
-  const requiredWidth = projectedWidthPixels * texelsPerPixel;
-  const requiredHeight = projectedHeightPixels * texelsPerPixel;
-  const targetWidth = bucketForDemand(requiredWidth, minSize, maxSize, maxTextureSize);
-  const targetHeight = bucketForDemand(requiredHeight, minSize, maxSize, maxTextureSize);
-  const targetBucket = Math.max(targetWidth, targetHeight);
-
-  return {
-    projectedWidthPixels,
-    projectedHeightPixels,
-    projectedPixels,
-    requiredWidth,
-    requiredHeight,
-    requiredBucket: bucketForDemand(Math.max(requiredWidth, requiredHeight), minSize, maxSize, maxTextureSize),
-    targetWidth,
-    targetHeight,
-    targetBucket,
-  };
 }
 
 export function catalogSeed(value) {
@@ -244,43 +171,6 @@ export function equirectDirectionFromUv(u, v) {
   ).normalize();
 }
 
-export function cameraForwardFromInfo(cameraInfo) {
-  const x = Number(cameraInfo.forwardX ?? cameraInfo.forward?.x ?? 0);
-  const y = Number(cameraInfo.forwardY ?? cameraInfo.forward?.y ?? 0);
-  const z = Number(cameraInfo.forwardZ ?? cameraInfo.forward?.z ?? -1);
-  const length = Math.hypot(x, y, z) || 1;
-  return {
-    x: x / length,
-    y: y / length,
-    z: z / length,
-  };
-}
-
-export function centerWeightForCosine(cosAngle, centerBias) {
-  const centerScore = clamp((cosAngle + 1) * 0.5, 0, 1);
-  const biasedWeight = 0.15 + 1.85 * centerScore * centerScore;
-  return {
-    centerScore,
-    centerWeight: 1 + (biasedWeight - 1) * centerBias,
-  };
-}
-
-export function staleWeightForState(state) {
-  if (state === PATCH_STATES.STALE) return 2;
-  if (state === PATCH_STATES.EMPTY || state === PATCH_STATES.QUEUED) return 1.5;
-  if (state === PATCH_STATES.BAKING) return 0.5;
-  if (state === PATCH_STATES.EVICTING) return 0.25;
-  return 1;
-}
-
-export function densityImportanceForPatch(descriptor) {
-  const backgroundImportance = Math.max(0.25, descriptor.densityScale);
-  const brightRatio = descriptor.brightStarCount / Math.max(descriptor.estimatedStarCount, 1);
-  const brightCountImportance = 1 + Math.min(2, brightRatio * 4);
-  const brightPressureImportance = 1 + Math.min(1, descriptor.brightStarPressure * 2048);
-  return backgroundImportance * brightCountImportance * brightPressureImportance;
-}
-
 export function emptyStarClassStats() {
   return {
     starClassTotal: 0,
@@ -303,22 +193,10 @@ export function emptyStarClassStats() {
     lastStarQueryStarCount: 0,
     lastStarQueryInstanceCount: 0,
     lastStarQueryCellCount: 0,
-    sparseMode: SPARSE_PATCH_MODES.FULL,
-    effectiveSparseMode: SPARSE_PATCH_MODES.FULL,
-    sparseWantedPatchCount: 0,
-    sparseResidentPatchCount: 0,
-    sparseEvictedPatchCount: 0,
-    sparseFallbackPatchCount: 0,
-    sparseVisiblePatchCount: 0,
-    sparseBudgetUsedBytes: 0,
-    sparseBudgetUsedMemory: "0 B",
-    sparseBudgetRatio: 0,
-    sparseBudgetExceeded: false,
-    sparseSelectionSummary: "none",
   };
 }
 
-export function starSizeRank(rSize, rSizeGate = 1, largeStarRarity = 0) {
+function starSizeRank(rSize, rSizeGate = 1, largeStarRarity = 0) {
   const baseRank = Math.pow(clamp(rSize, 0, 1), STAR_SIZE_RARITY_EXPONENT);
   const gate = 1 + (Math.pow(clamp(rSizeGate, 0, 1), STAR_SIZE_GATE_EXPONENT) - 1) * clamp(largeStarRarity, 0, 1);
   return baseRank * gate;

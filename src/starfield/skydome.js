@@ -4,7 +4,6 @@ import {
   DOME_RADIUS,
   FALLBACK_STATES,
   PATCH_CROSSFADE_MS,
-  PATCH_STATES,
   clamp,
   sphereVerticalSegmentsFor,
 } from "./constants.js";
@@ -119,22 +118,6 @@ export function createSkydomeManager({
     descriptor.blendToTarget = null;
     activePatchBlends.delete(descriptor);
     setDescriptorMaterialTextures(descriptor, target);
-    syncBlendStats();
-  }
-
-  function bindDescriptorFallback(descriptor) {
-    descriptor.currentTarget = null;
-    descriptor.target = null;
-    descriptor.nextTarget = null;
-    descriptor.blendActive = false;
-    descriptor.blendProgress = 0;
-    descriptor.blendFromTarget = null;
-    descriptor.blendToTarget = null;
-    descriptor.fallbackState = FALLBACK_STATES.SPARSE;
-    descriptor.allocationState = ALLOCATION_STATES.UNALLOCATED;
-    descriptor.state = PATCH_STATES.EMPTY;
-    activePatchBlends.delete(descriptor);
-    setDescriptorMaterialTextures(descriptor, fallbackPatchTarget);
     syncBlendStats();
   }
 
@@ -280,7 +263,6 @@ export function createSkydomeManager({
     visibleTargetForDescriptor,
     setDescriptorMaterialTextures,
     bindDescriptorMaterialTarget,
-    bindDescriptorFallback,
     finishDescriptorBlend,
     startDescriptorBlend,
     promoteDescriptorBakeTarget,

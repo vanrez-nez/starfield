@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import {
-  BYTES_PER_MIB,
   DENSITY_FALLBACK_STARS_PER_PIXEL,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
   MAX_AUTO_SUPERSAMPLE,
@@ -10,12 +9,8 @@ import {
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
   REFERENCE_BAKE_WIDTH,
-  SPARSE_PATCH_MODES,
   AA_PIN_THRESHOLD_PX,
   SUBPIXEL_DENSITY_THRESHOLD_PX,
-  cameraForwardFromInfo,
-  centerWeightForCosine,
-  densityImportanceForPatch,
   emptyStarClassStats,
   estimateTextureBytes,
   formatBytes,
@@ -28,7 +23,6 @@ import {
   DEFAULT_WINKLE_FLASHINESS,
   sizeLabel,
   sphereVerticalSegmentsFor,
-  staleWeightForState,
 } from "./constants.js";
 import {
   maxDescriptorPrecisionSize,
@@ -53,7 +47,7 @@ export function createInitialStats({
     mode: "baked-equirect-skydome-tiled-catalog-splat",
     bakes: 0,
     renders: 0,
-    textureWidth: defaults.bakeWidth,
+    textureWidth: defaultPatchLayout.virtualWidth,
     textureHeight: defaultPatchLayout.virtualHeight,
     supersampleMode: "auto",
     horizontalFov: 0,
@@ -144,7 +138,6 @@ export function createInitialStats({
 
 export function computeDemandReadouts(ctx) {
   const {
-    adaptiveQuality,
     currentCameraInfo,
     currentPatchLayout,
     bakeUniforms,
@@ -152,9 +145,8 @@ export function computeDemandReadouts(ctx) {
     catalogDirty,
     overlayCatalogDirty = catalogDirty,
     stats,
-    activeSparseMode,
   } = ctx;
-  const targetTexelsPerPixel = currentPatchLayout.targetTexelsPerPixel ?? adaptiveQuality.targetTexelsPerPixel ?? 1;
+  const targetTexelsPerPixel = currentPatchLayout.targetTexelsPerPixel ?? 1;
   const horizontalFov = Number(currentCameraInfo.horizontalFov) || 0;
   const verticalFov = Number(currentCameraInfo.verticalFov) || 0;
   const horizontalFovRad = THREE.MathUtils.degToRad(Math.max(horizontalFov, 0.001));
@@ -210,15 +202,8 @@ export function computeDemandReadouts(ctx) {
     pixelRatio,
     screenSize: sizeLabel(screenWidth, screenHeight),
     cssSize: sizeLabel(cssWidth, cssHeight),
-    adaptiveResolution: adaptiveQuality.adaptiveResolution,
     targetTexelsPerPixel,
     texelsPerPixelTarget: targetTexelsPerPixel,
-    minPatchSize: 1,
-    maxPatchSize: Math.max(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight),
-    patchBudgetMb: adaptiveQuality.patchBudgetMb,
-    centerBias: adaptiveQuality.centerBias,
-    sparseMode: adaptiveQuality.sparseMode,
-    effectiveSparseMode: activeSparseMode(),
     pixelsPerRadianX,
     pixelsPerRadianY,
     pixelsPerDegreeX,
@@ -258,7 +243,6 @@ export function computeDemandReadouts(ctx) {
 
 export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) {
   const {
-    adaptiveQuality,
     currentPatchLayout,
     currentSupersample,
     patchDescriptors,
@@ -288,7 +272,7 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
     recommendedStorageHeight,
     FINAL_TEXTURE_BYTES_PER_PIXEL,
   ) * patchCount * residentLayerCount;
-  const patchBudgetBytes = allocationBudgetBytes ?? Math.max(BYTES_PER_MIB, adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
+  const patchBudgetBytes = allocationBudgetBytes ?? STARFIELD_ALLOCATION_BUDGET_BYTES;
 
   return {
     residentTextureBytes,
@@ -386,55 +370,10 @@ function computeCapReadouts({
   };
 }
 
-export function updatePatchDescriptorPriority({
-  descriptor,
-  cameraForward,
-  adaptiveQuality,
-  currentPatchLayout,
-  maxTextureSize,
-}) {
-  const cosAngle = Math.min(1, Math.max(-1,
-    descriptor.centerDirection.x * cameraForward.x
-      + descriptor.centerDirection.y * cameraForward.y
-      + descriptor.centerDirection.z * cameraForward.z,
-  ));
-  const centerAngleRad = Math.acos(cosAngle);
-  const { centerScore, centerWeight } = centerWeightForCosine(cosAngle, adaptiveQuality.centerBias);
-  const densityImportance = densityImportanceForPatch(descriptor);
-  const staleWeight = staleWeightForState(descriptor.state);
-  const contentSize = adaptiveQuality.adaptiveResolution
-    ? descriptor.targetSize
-    : descriptor.logicalSize;
-  const assignedWidth = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.width)));
-  const assignedHeight = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.height)));
-  const memoryCostBytes = estimateTextureBytes(
-    Math.min(maxTextureSize, assignedWidth + currentPatchLayout.guard * 2),
-    Math.min(maxTextureSize, assignedHeight + currentPatchLayout.guard * 2),
-    FINAL_TEXTURE_BYTES_PER_PIXEL,
-  );
-  const memoryCost = Math.max(memoryCostBytes / BYTES_PER_MIB, 0.001);
-  const projectedPixels = Math.max(1, descriptor.projectedPixels);
-
-  descriptor.priorityProjectedPixels = projectedPixels;
-  descriptor.priorityCenterAngleRad = centerAngleRad;
-  descriptor.priorityCenterAngleDeg = THREE.MathUtils.radToDeg(centerAngleRad);
-  descriptor.priorityCenterScore = centerScore;
-  descriptor.priorityCenterWeight = centerWeight;
-  descriptor.priorityDensityImportance = densityImportance;
-  descriptor.priorityStaleWeight = staleWeight;
-  descriptor.priorityMemoryCost = memoryCost;
-  descriptor.priorityMemoryCostBytes = memoryCostBytes;
-  descriptor.priority = (projectedPixels * centerWeight * densityImportance * staleWeight) / memoryCost;
-}
-
 export function updatePatchDescriptorDemand(ctx, demand) {
   const {
-    adaptiveQuality,
-    currentCameraInfo,
-    maxTextureSize,
     patchDescriptors,
   } = ctx;
-  const cameraForward = cameraForwardFromInfo(currentCameraInfo);
   patchDescriptors.forEach((descriptor) => {
     const projectedWidthPixels = descriptor.angularWidthRad * demand.pixelsPerRadianX;
     const projectedHeightPixels = descriptor.angularHeightRad * demand.pixelsPerRadianY;
@@ -476,26 +415,16 @@ export function updatePatchDescriptorDemand(ctx, demand) {
     descriptor.densityFallback = descriptor.densityScale < 1;
     descriptor.brightStarCount = demand.brightStarCount;
     descriptor.brightStarPressure = descriptor.brightStarCount / Math.max(projectedPixels, 1);
-    descriptor.downgraded = adaptiveQuality.adaptiveResolution
-      && descriptor.assignedSize.bucket < descriptor.targetSize.bucket;
-    updatePatchDescriptorPriority({
-      descriptor,
-      cameraForward,
-      adaptiveQuality,
-      currentPatchLayout: ctx.currentPatchLayout,
-      maxTextureSize,
-    });
+    descriptor.downgraded = descriptor.assignedSize.bucket < descriptor.targetSize.bucket;
   });
 }
 
 export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
   const {
-    adaptiveQuality,
     patchDescriptors,
     stats,
     queueState,
     targetManager,
-    activeSparseMode,
     activeBlendCount,
     catalogDirty,
   } = ctx;
@@ -507,14 +436,10 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
   const queriedStarCounts = patchDescriptors.map((descriptor) => descriptor.lastQueriedStarCount);
   const queriedInstanceCounts = patchDescriptors.map((descriptor) => descriptor.lastQueriedStarInstances);
   const pooledByBucket = targetManager.pooledTargetsByBucket();
-  const prioritySorted = [...patchDescriptors].sort((a, b) => b.priority - a.priority);
 
   patchDescriptors.forEach((descriptor) => {
     states[descriptor.state] = (states[descriptor.state] ?? 0) + 1;
     allocationStates[descriptor.allocationState] = (allocationStates[descriptor.allocationState] ?? 0) + 1;
-  });
-  prioritySorted.forEach((descriptor, index) => {
-    descriptor.priorityRank = index + 1;
   });
 
   const formatCounts = (counts) => Object.entries(counts)
@@ -526,39 +451,6 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
     const max = Math.max(...values);
     return min === max ? String(Math.round(min)) : `${Math.round(min)}-${Math.round(max)}`;
   };
-  const formatPriority = (value) => {
-    if (!Number.isFinite(value)) return "0";
-    if (value >= 1000000) return `${(value / 1000000).toFixed(2)}M`;
-    if (value >= 1000) return `${(value / 1000).toFixed(2)}K`;
-    return value.toFixed(2);
-  };
-  const topPriorityPatches = prioritySorted.slice(0, 5).map((descriptor) => ({
-    id: descriptor.id,
-    rank: descriptor.priorityRank,
-    priority: descriptor.priority,
-    projectedPixels: descriptor.priorityProjectedPixels,
-    centerAngleDeg: descriptor.priorityCenterAngleDeg,
-    centerWeight: descriptor.priorityCenterWeight,
-    densityImportance: descriptor.priorityDensityImportance,
-    staleWeight: descriptor.priorityStaleWeight,
-    memoryCost: descriptor.priorityMemoryCost,
-    memoryCostBytes: descriptor.priorityMemoryCostBytes,
-    brightStarCount: descriptor.brightStarCount,
-    state: descriptor.state,
-  }));
-  const topPrioritySummary = topPriorityPatches.length
-    ? topPriorityPatches.map((descriptor) => [
-      `#${descriptor.rank} ${descriptor.id}`,
-      `p=${formatPriority(descriptor.priority)}`,
-      `px=${formatPriority(descriptor.projectedPixels)}`,
-      `angle=${descriptor.centerAngleDeg.toFixed(1)}`,
-      `center=${descriptor.centerWeight.toFixed(2)}`,
-      `dens=${descriptor.densityImportance.toFixed(2)}`,
-      `stale=${descriptor.staleWeight.toFixed(2)}`,
-      `mem=${descriptor.memoryCost.toFixed(1)}MiB`,
-    ].join(" ")).join(" | ")
-    : "none";
-
   const summary = {
     patchDescriptorCount: patchDescriptors.length,
     descriptorCount: patchDescriptors.length,
@@ -599,18 +491,6 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
     densityFallbackPatchCount: patchDescriptors.filter((descriptor) => descriptor.densityScale < 1).length,
     downgradedPatchCount: patchDescriptors.filter((descriptor) => descriptor.downgraded).length,
     descriptorBrightStarPressure: brightStarPressures.reduce((maxPressure, pressure) => Math.max(maxPressure, pressure), 0),
-    sparseMode: adaptiveQuality.sparseMode,
-    effectiveSparseMode: activeSparseMode(),
-    sparseWantedPatchCount: patchDescriptors.filter((descriptor) => descriptor.sparseWanted).length,
-    sparseResidentPatchCount: patchDescriptors.filter((descriptor) => descriptor.sparseWanted && descriptor.allocationState === "allocated").length,
-    sparseEvictedPatchCount: patchDescriptors.filter((descriptor) => descriptor.sparseEvicted).length,
-    sparseFallbackPatchCount: patchDescriptors.filter((descriptor) => descriptor.fallbackState === "sparse").length,
-    sparseVisiblePatchCount: patchDescriptors.filter((descriptor) => descriptor.sparseVisible).length,
-    sparseBudgetUsedBytes: stats.sparseBudgetUsedBytes,
-    sparseBudgetUsedMemory: stats.sparseBudgetUsedMemory,
-    sparseBudgetRatio: stats.sparseBudgetRatio,
-    sparseBudgetExceeded: stats.sparseBudgetExceeded,
-    sparseSelectionSummary: stats.sparseSelectionSummary,
     queriedPatchStarCount: queriedStarCounts.reduce((total, count) => total + count, 0),
     queriedPatchInstanceCount: queriedInstanceCounts.reduce((total, count) => total + count, 0),
     queriedPatchStarSummary: formatRange(queriedStarCounts),
@@ -621,11 +501,6 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
     descriptorTargetBucketMin: targetBuckets.length ? Math.min(...targetBuckets) : 0,
     descriptorTargetBucketMax: targetBuckets.length ? Math.max(...targetBuckets) : 0,
     descriptorTargetBucketSummary: formatRange(targetBuckets),
-    topPriorityPatches,
-    topPrioritySummary,
-    highestPriorityPatch: topPriorityPatches[0]?.id ?? "none",
-    highestPriority: topPriorityPatches[0]?.priority ?? 0,
-    lowestPriority: prioritySorted[prioritySorted.length - 1]?.priority ?? 0,
   };
 
   if (includeDebug) {
@@ -651,15 +526,10 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
       brightStarCount: descriptor.brightStarCount,
       brightStarPressure: descriptor.brightStarPressure,
       downgraded: descriptor.downgraded,
-      sparseWanted: descriptor.sparseWanted,
-      sparseVisible: descriptor.sparseVisible,
-      sparseScore: descriptor.sparseScore,
-      sparseEvicted: descriptor.sparseEvicted,
       lastQueriedStarCount: descriptor.lastQueriedStarCount,
       lastQueriedStarInstances: descriptor.lastQueriedStarInstances,
       lastQueriedCellCount: descriptor.lastQueriedCellCount,
       lastBakeReason: descriptor.lastBakeReason,
-      lastBakePriority: descriptor.lastBakePriority,
       lastBakeDurationMs: descriptor.lastBakeDurationMs,
       lastBakedLayerKey: descriptor.lastBakedLayerKey,
       lastBakedScreenSignatureKey: descriptor.lastBakedScreenSignatureKey,
@@ -669,16 +539,6 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
       layerDirtyReason: descriptor.layerDirtyReason,
       blendActive: descriptor.blendActive,
       blendProgress: descriptor.blendProgress,
-      priorityRank: descriptor.priorityRank,
-      priority: descriptor.priority,
-      priorityProjectedPixels: descriptor.priorityProjectedPixels,
-      priorityCenterAngleDeg: descriptor.priorityCenterAngleDeg,
-      priorityCenterScore: descriptor.priorityCenterScore,
-      priorityCenterWeight: descriptor.priorityCenterWeight,
-      priorityDensityImportance: descriptor.priorityDensityImportance,
-      priorityStaleWeight: descriptor.priorityStaleWeight,
-      priorityMemoryCost: descriptor.priorityMemoryCost,
-      priorityMemoryCostBytes: descriptor.priorityMemoryCostBytes,
     }));
   }
 
@@ -687,7 +547,6 @@ export function patchDescriptorSummary(ctx, { includeDebug = false } = {}) {
 
 export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail = "panel" } = {}) {
   const {
-    currentBakeWidth,
     currentPatchLayout,
     currentSupersample,
     patchDescriptors,
@@ -756,7 +615,6 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail
 
 export function updatePatchStats(ctx) {
   const {
-    currentBakeWidth,
     currentPatchLayout,
     currentSupersample,
     patchDescriptors,
@@ -775,7 +633,7 @@ export function updatePatchStats(ctx) {
     demand,
     patchDescriptors,
   });
-  stats.textureWidth = currentBakeWidth;
+  stats.textureWidth = currentPatchLayout.virtualWidth;
   stats.textureHeight = currentPatchLayout.virtualHeight;
   stats.supersample = currentSupersample;
   stats.maxTextureSize = maxTextureSize;
@@ -805,16 +663,3 @@ export function updateSphereSegmentStats(stats, currentSphereSegments) {
   stats.sphereSegments = currentSphereSegments;
   stats.sphereVerticalSegments = sphereVerticalSegmentsFor(currentSphereSegments);
 }
-
-export function defaultQueueState() {
-  return {
-    bakeJobQueue: [],
-    activeBakeJobs: 0,
-    activeBakeJob: null,
-    pendingBakeJobs: 0,
-    completedBakeJobs: 0,
-    totalQueuedBakeJobs: 0,
-  };
-}
-
-export { SPARSE_PATCH_MODES };
