@@ -3,11 +3,13 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import Stats from "three/addons/libs/stats.module.js";
 import "./styles.css";
 import { createControls } from "./controls.js";
+import { createGpuStarfield } from "./gpu-starfield.js";
 import { createStarfield } from "./starfield.js";
 
 const HORIZONTAL_FOV = 60;
 
 const canvas = document.querySelector("#scene");
+const panel = document.querySelector("#panel");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -27,6 +29,7 @@ document.body.appendChild(stats.dom);
 const scene = new THREE.Scene();
 const drawingBufferSize = new THREE.Vector2();
 const cameraForward = new THREE.Vector3();
+const clock = new THREE.Clock();
 
 function verticalFovForViewport(horizontalFov, aspect) {
   const horizontalRadians = THREE.MathUtils.degToRad(horizontalFov);
@@ -48,6 +51,7 @@ const state = {
 };
 
 let starfield = null;
+let gpuStarfield = null;
 
 const cachedCameraInfo = {
   horizontalFov: HORIZONTAL_FOV,
@@ -74,6 +78,12 @@ orbitControls.minPolarAngle = Math.PI / 2 - 1.35;
 orbitControls.maxPolarAngle = Math.PI / 2 + 1.35;
 orbitControls.rotateSpeed = 0.45;
 orbitControls.saveState();
+
+["pointerdown", "pointermove", "pointerup", "pointercancel", "wheel"].forEach((eventName) => {
+  panel?.addEventListener(eventName, (event) => {
+    event.stopPropagation();
+  }, { passive: true });
+});
 
 function syncRenderCameraFromOrbit() {
   orbitCamera.updateMatrixWorld();
@@ -108,8 +118,15 @@ function cameraInfo({ screen = false } = {}) {
 function renderFrame() {
   stats.begin();
   applyResizeIfNeeded();
+  const delta = clock.getDelta();
   orbitControls.update();
   syncRenderCameraFromOrbit();
+  const frameCameraInfo = updateCameraInfoCache();
+  gpuStarfield.recordRender({
+    delta,
+    elapsedTime: clock.elapsedTime,
+    cameraInfo: frameCameraInfo,
+  });
   starfield.recordRender();
   renderer.render(scene, camera);
   stats.end();
@@ -129,8 +146,14 @@ starfield = createStarfield({
   scene,
   requestRender: requestRuntimeRender,
 });
+gpuStarfield = createGpuStarfield({
+  scene,
+  requestRender: requestRuntimeRender,
+});
 syncRenderCameraFromOrbit();
-starfield.setCameraInfo(cameraInfo({ screen: true }));
+const initialCameraInfo = cameraInfo({ screen: true });
+starfield.setCameraInfo(initialCameraInfo);
+gpuStarfield.setCameraInfo(initialCameraInfo);
 
 function recenter() {
   orbitControls.reset();
@@ -140,17 +163,21 @@ function recenter() {
 
 const uiControls = createControls({
   rows: document.querySelector("#rows"),
-	  buttons: {
-	    bake: document.querySelector("#rebake"),
-	    seed: document.querySelector("#seedBtn"),
-	    recenter: document.querySelector("#recenterBtn"),
-	    overlay: document.querySelector("#toggleOverlayBtn"),
-	  },
+  buttons: {
+    bake: document.querySelector("#rebake"),
+    seed: document.querySelector("#seedBtn"),
+    recenter: document.querySelector("#recenterBtn"),
+    overlay: document.querySelector("#toggleOverlayBtn"),
+  },
   starfield,
+  gpuStarfield,
   getStats(options = {}) {
     applyResizeIfNeeded();
     syncRenderCameraFromOrbit();
-    return starfield.collectStats(renderer.info, cameraInfo({ screen: true }), options);
+    return {
+      ...starfield.collectStats(renderer.info, cameraInfo({ screen: true }), options),
+      ...gpuStarfield.collectStats(),
+    };
   },
   onRecenter: recenter,
 });
@@ -182,7 +209,9 @@ function applyResizeIfNeeded({ force = false } = {}) {
   orbitCamera.fov = camera.fov;
   orbitCamera.updateProjectionMatrix();
   syncRenderCameraFromOrbit();
-  starfield.setCameraInfo(cameraInfo({ screen: true }));
+  const nextCameraInfo = cameraInfo({ screen: true });
+  starfield.setCameraInfo(nextCameraInfo);
+  gpuStarfield.setCameraInfo(nextCameraInfo);
   requestRuntimeRender();
 }
 
@@ -195,6 +224,7 @@ window.addEventListener("beforeunload", () => {
   cancelAnimationFrame(state.animationFrame);
   uiControls.dispose();
   orbitControls.dispose();
+  gpuStarfield.dispose();
   starfield.dispose();
   stats.dom.remove();
   renderer.dispose();

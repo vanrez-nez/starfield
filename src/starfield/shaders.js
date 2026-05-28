@@ -315,7 +315,8 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
   uniform float uTime;
   uniform float uWinkleAmount;
   uniform float uWinkleFlashiness;
-  uniform float uSmallBlinkThreshold;
+  uniform float uEffectMinSize;
+  uniform float uEffectMaxSize;
   uniform float uOverlayStrength;
 
   const float PI = 3.14159265359;
@@ -363,6 +364,15 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
     return groupPulse * mix(0.45, 1.0, localPulse);
   }
 
+  float sizeRangeMask(float visualSizePx) {
+    float minSize = min(uEffectMinSize, uEffectMaxSize);
+    float maxSize = max(uEffectMinSize, uEffectMaxSize);
+    if (maxSize <= 0.0001 || maxSize - minSize <= 0.0001) return 0.0;
+    float lower = minSize <= 0.0001 ? 1.0 : smoothstep(minSize, minSize + 0.35, visualSizePx);
+    float upper = 1.0 - smoothstep(maxSize, maxSize + 0.35, visualSizePx);
+    return clamp(lower * upper, 0.0, 1.0);
+  }
+
   void main() {
     float angularDistance = length(vLocal) * vSupportAngle;
     float glowSharpness = 0.45;
@@ -372,9 +382,7 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
     float rank = sizeRank(vRandoms.x, vSizeGate);
     float scale = sizeMultiplier(vRandoms.x, vSizeGate);
     float visualSizePx = uStarSize * scale;
-    float smallBlinkMask = uSmallBlinkThreshold > 0.0001
-      ? 1.0 - smoothstep(uSmallBlinkThreshold, uSmallBlinkThreshold + 0.35, visualSizePx)
-      : 0.0;
+    float smallBlinkMask = sizeRangeMask(visualSizePx);
     float activeSmallBlink = smallBlinkMask * smoothstep(0.001, 0.05, flashDepth);
     float hardBlinkPulse = smoothstep(0.68, 0.74, burst);
     float starRadius = uStarSize * scale * uScreenPixelAngle;
@@ -385,12 +393,8 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
     float corePower = mix(2.0, 5.25, glowSharpness);
     float coreCut = 1.0 - smoothstep(mix(4.6, 2.25, glowSharpness), mix(5.7, 2.65, glowSharpness), coreNorm);
     float core = exp(-0.5 * pow(coreNorm, corePower)) * coreCut * coreEnergy;
-    core *= 1.0 + burst * flashDepth * 0.14;
-    float blinkRadius = max(starRadius * 0.65, uScreenPixelAngle * 0.85);
-    float blinkNorm = angularDistance / max(blinkRadius, 1e-6);
-    float hardBlinkShape = 1.0 - smoothstep(0.62, 0.74, blinkNorm);
-    float hardBlinkCore = hardBlinkShape * hardBlinkPulse * flashDepth * 2.1;
-    core = mix(core, core * 0.18 + hardBlinkCore, activeSmallBlink);
+    core *= 1.0 + burst * flashDepth * 0.14 * (1.0 - activeSmallBlink);
+    core *= 1.0 - activeSmallBlink * hardBlinkPulse * 0.55;
 
     float glare = 0.0;
     if (uGlareSize > 0.000001 && uGlareStr > 0.000001) {
@@ -402,16 +406,15 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
       float glarePower = mix(2.0, 3.75, glowSharpness);
       float glareCut = 1.0 - smoothstep(mix(5.2, 2.85, glowSharpness), mix(6.4, 3.35, glowSharpness), glareNorm);
       glare = exp(-0.5 * pow(glareNorm, glarePower)) * glareCut * glareEnergy;
-      glare *= 1.0 + burst * flashDepth * 0.25;
-      glare *= 1.0 - activeSmallBlink;
+      glare *= 1.0 + burst * flashDepth * 0.25 * (1.0 - activeSmallBlink);
+      glare *= 1.0 - activeSmallBlink * mix(0.72, 0.96, hardBlinkPulse);
     }
 
     float linkedBrightRand = mix(vRandoms.y, max(vRandoms.y, rank), STAR_SIZE_BRIGHTNESS_LINK * uSizeVar);
     float linkedGlareRand = mix(vRandoms.z, max(vRandoms.z, rank), STAR_SIZE_GLARE_LINK * uSizeVar);
     float glareStr = uGlareStr * mix(1.0, pow(linkedGlareRand, 8.0), uGlareVar);
     float bright = uBright * mix(1.0, pow(linkedBrightRand, 3.0) * 3.0, uBrightVar);
-    bright *= 1.0 + burst * flashDepth * 0.18;
-    bright *= 1.0 + hardBlinkPulse * activeSmallBlink * flashDepth * 0.85;
+    bright *= 1.0 + burst * flashDepth * 0.18 * (1.0 - activeSmallBlink);
     float classBoost = vClass > 2.5 ? 1.28 : 1.0;
     vec3 color = starColor(mix(0.5, vRandoms.w, uColorVar));
     vec3 radiance = color * (core + glare * glareStr) * bright * classBoost * uOverlayStrength;
@@ -440,7 +443,6 @@ const WINKLE_VERTEX_SHADER = /* glsl */ `
   uniform float uSizeVar;
   uniform float uLargeStarRarity;
   uniform float uGlareSize;
-  uniform float uWinkleMinSize;
 
   const float MIN_GLARE_PIXELS = ${MIN_GLARE_PIXELS.toFixed(2)};
   const float STAR_SIZE_MIN_SCALE = ${STAR_SIZE_MIN_SCALE.toFixed(2)};
@@ -464,7 +466,7 @@ const WINKLE_VERTEX_SHADER = /* glsl */ `
     float classBoost = classId > 2.5 ? 1.35 : 1.0;
     float importanceBoost = mix(0.85, 1.35, clamp(importance, 0.0, 1.0));
     float support = max(starRadius * 2.2 + glareRadius * 0.7, MIN_GLARE_PIXELS * uScreenPixelAngle) * classBoost * importanceBoost;
-    return max(support, uWinkleMinSize * uScreenPixelAngle);
+    return support;
   }
 
   void main() {
@@ -498,7 +500,8 @@ const WINKLE_FRAGMENT_SHADER = /* glsl */ `
   uniform float uWinkleAmount;
   uniform float uWinkleSharpness;
   uniform float uWinkleFlashiness;
-  uniform float uSmallBlinkThreshold;
+  uniform float uEffectMinSize;
+  uniform float uEffectMaxSize;
   uniform float uStarSize;
   uniform float uSizeVar;
   uniform float uLargeStarRarity;
@@ -557,6 +560,15 @@ const WINKLE_FRAGMENT_SHADER = /* glsl */ `
     return groupPulse * mix(0.45, 1.0, localPulse);
   }
 
+  float sizeRangeMask(float visualSizePx) {
+    float minSize = min(uEffectMinSize, uEffectMaxSize);
+    float maxSize = max(uEffectMinSize, uEffectMaxSize);
+    if (maxSize <= 0.0001 || maxSize - minSize <= 0.0001) return 0.0;
+    float lower = minSize <= 0.0001 ? 1.0 : smoothstep(minSize, minSize + 0.35, visualSizePx);
+    float upper = 1.0 - smoothstep(maxSize, maxSize + 0.35, visualSizePx);
+    return clamp(lower * upper, 0.0, 1.0);
+  }
+
   void main() {
     if (uWinkleAmount <= 0.0001) discard;
 
@@ -573,10 +585,11 @@ const WINKLE_FRAGMENT_SHADER = /* glsl */ `
     float rank = sizeRank(vRandoms.x, vSizeGate);
     float scale = mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, rank), uSizeVar);
     float visualSizePx = uStarSize * scale;
-    float smallBlinkMask = uSmallBlinkThreshold > 0.0001
-      ? 1.0 - smoothstep(uSmallBlinkThreshold, uSmallBlinkThreshold + 0.35, visualSizePx)
-      : 0.0;
-    float glintFade = 1.0 - smallBlinkMask;
+    float smallBlinkMask = sizeRangeMask(visualSizePx);
+    float flashDepth = clamp(uWinkleAmount * flashiness, 0.0, 1.0);
+    float activeSmallBlink = smallBlinkMask * smoothstep(0.001, 0.05, flashDepth);
+    float hardBlinkPulse = smoothstep(0.68, 0.74, burst);
+    float glintFade = 1.0 - activeSmallBlink * mix(0.72, 0.96, hardBlinkPulse);
     float rayNoise = noise1(time * 0.57 + 9.0);
     float trembleNoise = noise1(time * 0.31 + 17.0);
     float maxTremble = 0.05235987756;

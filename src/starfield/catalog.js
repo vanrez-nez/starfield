@@ -3,6 +3,7 @@ import {
   BRIGHT_STAR_FRACTION,
   BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
   STAR_CLASSES,
+  STAR_CATALOG_BASE_DENSITY,
   STAR_QUERY_EDGE_PAD_CELLS,
   STAR_QUERY_SEAM_COPIES,
   classifyStar,
@@ -55,17 +56,21 @@ export function createEmptyOverlayGeometry() {
 
 export function currentStarGrid(bakeUniforms) {
   const density = Math.max(1, Math.round(bakeUniforms.uDensity.value));
+  const densityScale = clamp(density / STAR_CATALOG_BASE_DENSITY, 0, 1);
+  const activationThreshold = densityScale * densityScale;
   return {
-    columns: density,
-    rows: density,
-    occupancy: clamp(1 - bakeUniforms.uSparsity.value, 0, 1),
+    columns: STAR_CATALOG_BASE_DENSITY,
+    rows: STAR_CATALOG_BASE_DENSITY,
+    density,
+    densityScale,
+    activationThreshold,
     seed: catalogSeed(bakeUniforms.uSeed.value),
   };
 }
 
 export function catalogStarCount(bakeUniforms) {
   const grid = currentStarGrid(bakeUniforms);
-  return Math.round(grid.columns * grid.rows * grid.occupancy);
+  return Math.round(grid.columns * grid.rows * grid.activationThreshold);
 }
 
 function largeStarRarityFromUniforms(bakeUniforms) {
@@ -83,7 +88,7 @@ export function starFromCell(grid, column, row, largeStarRarity = 0) {
   if (row < 0 || row >= grid.rows) return null;
 
   const wrappedColumn = wrapIndex(column, grid.columns);
-  if (hashCellUnit(grid.seed, wrappedColumn, row, 0) >= grid.occupancy) return null;
+  if (hashCellUnit(grid.seed, wrappedColumn, row, 0) >= grid.activationThreshold) return null;
 
   const u = (wrappedColumn + hashCellUnit(grid.seed, wrappedColumn, row, 1)) / grid.columns;
   const q = (row + hashCellUnit(grid.seed, wrappedColumn, row, 2)) / grid.rows;

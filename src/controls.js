@@ -5,10 +5,11 @@ const PARAMS = [
   { kind: "layerTabs" },
 ];
 
+const GPU_FIELD_LAYER_ID = "gpuField";
+
 const STAR_LAYER_CONTROLS = [
   { type: "group", label: "Field" },
-  { type: "range", key: "uDensity", label: "Density", min: 10, max: 360, step: 1, format: (v) => v.toFixed(0), param: true },
-  { type: "range", key: "uSparsity", label: "Sparsity", min: 0, max: 0.97, step: 0.005, format: (v) => v.toFixed(3), param: true },
+  { type: "range", key: "uDensity", label: "Density", min: 10, max: 1000, step: 1, format: (v) => v.toFixed(0), param: true },
   { type: "range", key: "uSeed", label: "Seed", min: 0, max: 1000, step: 1, format: (v) => v.toFixed(0), param: true },
   { type: "group", label: "Core" },
   { type: "range", key: "uStarSize", label: "Star Size", min: 0.1, max: 4, step: 0.05, format: (v) => v.toFixed(2), param: true },
@@ -43,6 +44,21 @@ const LAYER_TABS = [
     ],
   },
   {
+    id: GPU_FIELD_LAYER_ID,
+    label: "GPU Field",
+    controls: [
+      { type: "toggle", key: "enabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "group", label: "Runtime" },
+      { type: "range", key: "starCount", label: "Star Count", min: 0, max: 30000, step: 512, format: (v) => v.toFixed(0), param: true },
+      { type: "range", key: "fieldRadius", label: "Field Radius", min: 4, max: 40, step: 0.5, format: (v) => v.toFixed(1), param: true },
+      { type: "range", key: "depthFade", label: "Depth Fade", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+      { type: "range", key: "travelSpeed", label: "Travel Speed", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2), param: true },
+      { type: "range", key: "starSize", label: "Star Size", min: 0.1, max: 4, step: 0.05, format: (v) => v.toFixed(2), param: true },
+      { type: "range", key: "brightness", label: "Brightness", min: 0, max: 2, step: 0.02, format: (v) => v.toFixed(2), param: true },
+      { type: "range", key: "colorVariance", label: "Color Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+    ],
+  },
+  {
     id: "brightOverlay",
     label: "Overlay",
     controls: [
@@ -51,10 +67,10 @@ const LAYER_TABS = [
       ...STAR_LAYER_CONTROLS,
       { type: "group", label: "Effects" },
       { type: "range", key: "uWinkleAmount", label: "Winkle Amount", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
-      { type: "range", key: "uWinkleMinSize", label: "Winkle Min Size", min: 0, max: 12, step: 0.25, format: (v) => v.toFixed(2), param: true },
+      { type: "range", key: "uEffectMinSize", label: "Min Size", min: 0, max: 12, step: 0.05, format: (v) => v.toFixed(2), param: true },
+      { type: "range", key: "uEffectMaxSize", label: "Max Size", min: 0, max: 12, step: 0.05, format: (v) => v.toFixed(2), param: true },
       { type: "range", key: "uWinkleSharpness", label: "Winkle Sharpness", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
       { type: "range", key: "uWinkleFlashiness", label: "Winkle Flashiness", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
-      { type: "range", key: "uSmallBlinkThreshold", label: "Small Blink Threshold", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2), param: true },
     ],
   },
 ];
@@ -108,22 +124,26 @@ function formatGpuStatsForPanel(stats) {
     `Baked Stars: ${stats.bakedStarLayerEnabled ? "on" : "off"}`,
     `Baked Radius: ${formatNumber(stats.bakedStarLayerRadius, 2)}`,
     `Baked Density: ${formatInteger(stats.bakedStarLayerDensity)}`,
-    `Baked Sparsity: ${formatNumber(stats.bakedStarLayerSparsity, 3)}`,
     `Baked Seed: ${formatNumber(stats.bakedStarLayerSeed, 0)}`,
     `Baked Count: ${formatInteger(stats.bakedStarLayerStarCount)}`,
     `Baked Draws: ${formatInteger(stats.bakedStarLayerDrawCalls)}`,
+    `GPU Field: ${stats.gpuFieldEnabled ? "on" : "off"}`,
+    `GPU Field Count: ${formatInteger(stats.gpuFieldStarCount)}`,
+    `GPU Field Radius: ${formatNumber(stats.gpuFieldRadius, 1)}`,
+    `GPU Field Speed: ${formatNumber(stats.gpuFieldTravelSpeed, 2)}`,
+    `GPU Field Draws: ${formatInteger(stats.gpuFieldDrawCalls)}`,
+    `GPU Field Tris: ${formatInteger(stats.gpuFieldTriangles)}`,
     `Bright Overlay: ${stats.overlayEnabled ? "on" : "off"}`,
     `Overlay Radius: ${formatNumber(stats.overlayRadius, 2)}`,
     `Overlay Density: ${formatInteger(stats.overlayLayerDensity)}`,
-    `Overlay Sparsity: ${formatNumber(stats.overlayLayerSparsity, 3)}`,
     `Overlay Seed: ${formatNumber(stats.overlayLayerSeed, 0)}`,
     `Overlay Count: ${formatInteger(stats.overlayLayerStarCount)}`,
     `Overlay Draws: ${formatInteger(stats.overlayDrawCalls)}`,
     `Winkle Amount: ${formatNumber(stats.winkleAmount, 2)}`,
-    `Winkle Min Size: ${formatNumber(stats.winkleMinSize, 2)}`,
+    `Effect Min Size: ${formatNumber(stats.effectMinSize, 2)}`,
+    `Effect Max Size: ${formatNumber(stats.effectMaxSize, 2)}`,
     `Winkle Sharpness: ${formatNumber(stats.winkleSharpness, 2)}`,
     `Winkle Flashiness: ${formatNumber(stats.winkleFlashiness, 2)}`,
-    `Small Blink Threshold: ${formatNumber(stats.smallBlinkThreshold, 2)}`,
     `Winkles: ${formatInteger(stats.winkleActiveCount)}/${formatInteger(stats.winkleMaxCount)}`,
     `Winkle Draws: ${formatInteger(stats.winkleDrawCalls)}`,
     `Winkle Tris: ${formatInteger(stats.winkleTriangles)}`,
@@ -215,10 +235,10 @@ function formatGpuStatsForPanel(stats) {
     `Overlay Tris: ${formatInteger(stats.overlayTriangleCount)}`,
     `Overlay Draws: ${formatInteger(stats.overlayDrawCalls)}`,
     `Winkle Amount: ${formatNumber(stats.winkleAmount, 2)}`,
-    `Winkle Min Size: ${formatNumber(stats.winkleMinSize, 2)}`,
+    `Effect Min Size: ${formatNumber(stats.effectMinSize, 2)}`,
+    `Effect Max Size: ${formatNumber(stats.effectMaxSize, 2)}`,
     `Winkle Sharpness: ${formatNumber(stats.winkleSharpness, 2)}`,
     `Winkle Flashiness: ${formatNumber(stats.winkleFlashiness, 2)}`,
-    `Small Blink Threshold: ${formatNumber(stats.smallBlinkThreshold, 2)}`,
     `Winkle Max: ${formatInteger(stats.winkleMaxCount)}`,
     `Winkle Active: ${formatInteger(stats.winkleActiveCount)}`,
     `Winkle Tris: ${formatInteger(stats.winkleTriangles)}`,
@@ -226,6 +246,18 @@ function formatGpuStatsForPanel(stats) {
     `Background Layer: ${stats.backgroundLayerEnabled ? "yes" : "no"}`,
     `Background Draws: ${formatInteger(stats.backgroundLayerDrawCalls)}`,
     `Background Tris: ${formatInteger(stats.backgroundLayerTriangles)}`,
+    `GPU Field: ${stats.gpuFieldEnabled ? "yes" : "no"}`,
+    `GPU Field Count: ${formatInteger(stats.gpuFieldStarCount)}`,
+    `GPU Field Radius: ${formatNumber(stats.gpuFieldRadius, 1)}`,
+    `GPU Field Depth Fade: ${formatNumber(stats.gpuFieldDepthFade, 2)}`,
+    `GPU Field Speed: ${formatNumber(stats.gpuFieldTravelSpeed, 2)}`,
+    `GPU Field Size: ${formatNumber(stats.gpuFieldStarSize, 2)}`,
+    `GPU Field Brightness: ${formatNumber(stats.gpuFieldBrightness, 2)}`,
+    `GPU Field Color Var: ${formatNumber(stats.gpuFieldColorVariance, 2)}`,
+    `GPU Field Distance: ${formatNumber(stats.gpuFieldVirtualDistance, 2)}`,
+    `GPU Field Rebuilds: ${formatInteger(stats.gpuFieldGeometryRebuilds)}`,
+    `GPU Field Draws: ${formatInteger(stats.gpuFieldDrawCalls)}`,
+    `GPU Field Tris: ${formatInteger(stats.gpuFieldTriangles)}`,
     `Tile Aware: ${stats.tileAwareGeneration ? "yes" : "no"}`,
     `Query Grid: ${stats.starQueryGrid ?? "0x0"}`,
     `Last Query Patch: ${stats.lastStarQueryPatchId ?? "none"}`,
@@ -263,7 +295,7 @@ function formatGpuStatsForPanel(stats) {
   ].join("\n");
 }
 
-export function createControls({ rows, buttons, starfield, getStats, onRecenter }) {
+export function createControls({ rows, buttons, starfield, gpuStarfield, getStats, onRecenter }) {
   const gpuStatsPanel = document.createElement("div");
   gpuStatsPanel.id = "gpu-stats";
   gpuStatsPanel.setAttribute("aria-live", "polite");
@@ -277,6 +309,38 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   const layerToggleInputs = new Map();
   const layerParamInputs = new Map();
   let activeLayerId = "bakedStars";
+
+  function isGpuFieldLayer(layer) {
+    return layer === GPU_FIELD_LAYER_ID;
+  }
+
+  function getLayerEnabled(layer) {
+    return isGpuFieldLayer(layer) ? gpuStarfield.getEnabled() : starfield.getLayerEnabled(layer);
+  }
+
+  function setLayerEnabled(layer, enabled) {
+    if (isGpuFieldLayer(layer)) {
+      gpuStarfield.setEnabled(enabled);
+      return;
+    }
+    starfield.setLayerEnabled(layer, enabled);
+  }
+
+  function getLayerParam(layer, key) {
+    return isGpuFieldLayer(layer) ? gpuStarfield.getParam(key) : starfield.getLayerParam(layer, key);
+  }
+
+  function setLayerParam(layer, key, value, delay) {
+    if (isGpuFieldLayer(layer)) {
+      gpuStarfield.setParam(key, value);
+      return;
+    }
+    starfield.setLayerParam(layer, key, value, delay);
+  }
+
+  function getLayerDefault(layer, key) {
+    return isGpuFieldLayer(layer) ? gpuStarfield.defaults[key] : starfield.defaults[key];
+  }
 
   function isUxVisible() {
     return uxVisible;
@@ -348,7 +412,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   function syncLayerToggle(layer) {
     const control = layerToggleInputs.get(layer);
     if (!control) return;
-    const enabled = starfield.getLayerEnabled(layer);
+    const enabled = getLayerEnabled(layer);
     control.input.checked = enabled;
     control.value.textContent = control.format(enabled);
   }
@@ -356,14 +420,14 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   function syncLayerParam(layer, key) {
     const control = layerParamInputs.get(`${layer}:${key}`);
     if (!control) return;
-    const nextValue = starfield.getLayerParam(layer, key);
+    const nextValue = getLayerParam(layer, key);
     control.input.value = String(nextValue);
     control.value.textContent = control.format(nextValue);
     updateSliderFill(control.input, control.min, control.max);
   }
 
   function syncSeedButtonState() {
-    buttons.seed.disabled = activeLayerId === "skyBackground";
+    buttons.seed.disabled = activeLayerId === "skyBackground" || activeLayerId === GPU_FIELD_LAYER_ID;
   }
 
   function toggleOverlay() {
@@ -545,7 +609,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     const input = document.createElement("input");
     input.id = `control-${layer}-${control.key}`;
     input.type = "checkbox";
-    input.checked = Boolean(starfield.defaults[control.key]);
+    input.checked = Boolean(getLayerDefault(layer, control.key));
     label.htmlFor = input.id;
     layerToggleInputs.set(layer, { input, value, format: control.format });
 
@@ -558,7 +622,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
 
     input.addEventListener("change", () => {
       paint(input.checked);
-      starfield.setLayerEnabled(layer, input.checked);
+      setLayerEnabled(layer, input.checked);
       if (layer === "brightOverlay") {
         setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
       }
@@ -596,7 +660,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     input.min = String(control.min);
     input.max = String(control.max);
     input.step = String(control.step);
-    input.value = String(control.param ? starfield.getLayerParam(layer, control.key) : starfield.defaults[control.key]);
+    input.value = String(control.param ? getLayerParam(layer, control.key) : getLayerDefault(layer, control.key));
     label.htmlFor = input.id;
     if (control.param) {
       layerParamInputs.set(`${layer}:${control.key}`, {
@@ -617,7 +681,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
       const nextValue = Number(input.value);
       paint(nextValue);
       if (control.param) {
-        starfield.setLayerParam(layer, control.key, nextValue, 180);
+        setLayerParam(layer, control.key, nextValue, 180);
         refreshVisibleStatsPanel();
         return;
       }
@@ -824,7 +888,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   starfield.setReadoutsChangeHandler(refreshReadouts);
   buttons.bake.addEventListener("click", () => starfield.bakeNow());
   buttons.seed.addEventListener("click", () => {
-    if (activeLayerId === "skyBackground") return;
+    if (activeLayerId === "skyBackground" || activeLayerId === GPU_FIELD_LAYER_ID) return;
     starfield.reseedLayer(activeLayerId);
     syncLayerParam(activeLayerId, "uSeed");
     refreshVisibleStatsPanel({ force: true });
@@ -835,7 +899,7 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   window.printStarfieldGpuStats = printGpuStats;
 
   buildPanel();
-  ["skyBackground", "bakedStars", "brightOverlay"].forEach(syncLayerToggle);
+  ["skyBackground", "bakedStars", GPU_FIELD_LAYER_ID, "brightOverlay"].forEach(syncLayerToggle);
   setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
   syncSeedButtonState();
 

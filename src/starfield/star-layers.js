@@ -144,7 +144,8 @@ export function createStarLayerManager({
     uTime: { value: 0 },
     uWinkleAmount: overlayUniforms.uWinkleAmount,
     uWinkleFlashiness: overlayUniforms.uWinkleFlashiness,
-    uSmallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold,
+    uEffectMinSize: overlayUniforms.uEffectMinSize,
+    uEffectMaxSize: overlayUniforms.uEffectMaxSize,
     uOverlayStrength: { value: BRIGHT_STAR_OVERLAY_STRENGTH },
   };
   const brightOverlay = {
@@ -172,10 +173,10 @@ export function createStarLayerManager({
     uGlareStr: overlayUniforms.uGlareStr,
     uGlareVar: overlayUniforms.uGlareVar,
     uColorVar: overlayUniforms.uColorVar,
-    uWinkleMinSize: overlayUniforms.uWinkleMinSize,
+    uEffectMinSize: overlayUniforms.uEffectMinSize,
+    uEffectMaxSize: overlayUniforms.uEffectMaxSize,
     uWinkleSharpness: overlayUniforms.uWinkleSharpness,
     uWinkleFlashiness: overlayUniforms.uWinkleFlashiness,
-    uSmallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold,
     uTime: { value: 0 },
     uWinkleAmount: overlayUniforms.uWinkleAmount ?? { value: currentWinkleAmount },
   };
@@ -220,10 +221,10 @@ export function createStarLayerManager({
     winkleOverlay.mesh.visible = brightOverlayEnabled && currentWinkleAmount > 0 && activeCount > 0;
     winkleStats = {
       winkleAmount: currentWinkleAmount,
-      winkleMinSize: overlayUniforms.uWinkleMinSize?.value ?? 0,
+      effectMinSize: overlayUniforms.uEffectMinSize?.value ?? 0,
+      effectMaxSize: overlayUniforms.uEffectMaxSize?.value ?? 0,
       winkleSharpness: overlayUniforms.uWinkleSharpness?.value ?? 0,
       winkleFlashiness: overlayUniforms.uWinkleFlashiness?.value ?? 0,
-      smallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold?.value ?? 0,
       winkleMaxCount: WINKLE_MAX_COUNT,
       winkleActiveCount: activeCount,
       winkleDrawCalls: winkleOverlay.mesh.visible ? 1 : 0,
@@ -344,10 +345,10 @@ export function createStarLayerManager({
       ...backgroundLayerStats,
       ...brightOverlayStats,
       ...winkleStats,
-      winkleMinSize: overlayUniforms.uWinkleMinSize?.value ?? 0,
+      effectMinSize: overlayUniforms.uEffectMinSize?.value ?? 0,
+      effectMaxSize: overlayUniforms.uEffectMaxSize?.value ?? 0,
       winkleSharpness: overlayUniforms.uWinkleSharpness?.value ?? 0,
       winkleFlashiness: overlayUniforms.uWinkleFlashiness?.value ?? 0,
-      smallBlinkThreshold: overlayUniforms.uSmallBlinkThreshold?.value ?? 0,
     };
   }
 

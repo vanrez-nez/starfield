@@ -7,11 +7,11 @@ import {
   DEFAULT_ADAPTIVE_QUALITY,
   DEFAULT_BAKED_STAR_RADIUS,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
+  DEFAULT_EFFECT_MAX_SIZE,
+  DEFAULT_EFFECT_MIN_SIZE,
   DEFAULT_LARGE_STAR_RARITY,
-  DEFAULT_SMALL_BLINK_THRESHOLD,
   DEFAULT_WINKLE_AMOUNT,
   DEFAULT_WINKLE_FLASHINESS,
-  DEFAULT_WINKLE_MIN_SIZE,
   DEFAULT_WINKLE_SHARPNESS,
   DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
@@ -96,7 +96,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
   const initialBakeWidth = defaultPatchLayout.virtualWidth;
   const defaultStarParams = {
     uDensity: 360,
-    uSparsity: 0.005,
     uStarSize: 5,
     uSizeVar: 0.95,
     uLargeStarRarity: DEFAULT_LARGE_STAR_RARITY,
@@ -119,10 +118,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
     brightOverlayEnabled: BRIGHT_STAR_OVERLAY_ENABLED,
     brightOverlayRadius: DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
     uWinkleAmount: DEFAULT_WINKLE_AMOUNT,
-    uWinkleMinSize: DEFAULT_WINKLE_MIN_SIZE,
+    uEffectMinSize: DEFAULT_EFFECT_MIN_SIZE,
+    uEffectMaxSize: DEFAULT_EFFECT_MAX_SIZE,
     uWinkleSharpness: DEFAULT_WINKLE_SHARPNESS,
     uWinkleFlashiness: DEFAULT_WINKLE_FLASHINESS,
-    uSmallBlinkThreshold: DEFAULT_SMALL_BLINK_THRESHOLD,
     ...DEFAULT_ADAPTIVE_QUALITY,
   };
 
@@ -143,10 +142,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
       params: {
         ...defaultStarParams,
         uWinkleAmount: defaults.uWinkleAmount,
-        uWinkleMinSize: defaults.uWinkleMinSize,
+        uEffectMinSize: defaults.uEffectMinSize,
+        uEffectMaxSize: defaults.uEffectMaxSize,
         uWinkleSharpness: defaults.uWinkleSharpness,
         uWinkleFlashiness: defaults.uWinkleFlashiness,
-        uSmallBlinkThreshold: defaults.uSmallBlinkThreshold,
       },
     },
   };
@@ -177,7 +176,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uScreenPixelAngle: screenPixelAngleUniform,
     uReferenceHeight: referenceHeightUniform,
     uDensity: { value: layerState.bakedStars.params.uDensity },
-    uSparsity: { value: layerState.bakedStars.params.uSparsity },
     uStarSize: { value: layerState.bakedStars.params.uStarSize },
     uSizeVar: { value: layerState.bakedStars.params.uSizeVar },
     uLargeStarRarity: { value: layerState.bakedStars.params.uLargeStarRarity },
@@ -193,7 +191,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uScreenPixelAngle: screenPixelAngleUniform,
     uReferenceHeight: referenceHeightUniform,
     uDensity: { value: layerState.brightOverlay.params.uDensity },
-    uSparsity: { value: layerState.brightOverlay.params.uSparsity },
     uStarSize: { value: layerState.brightOverlay.params.uStarSize },
     uSizeVar: { value: layerState.brightOverlay.params.uSizeVar },
     uLargeStarRarity: { value: layerState.brightOverlay.params.uLargeStarRarity },
@@ -205,10 +202,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uColorVar: { value: layerState.brightOverlay.params.uColorVar },
     uSeed: { value: layerState.brightOverlay.params.uSeed },
     uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount },
-    uWinkleMinSize: { value: layerState.brightOverlay.params.uWinkleMinSize },
+    uEffectMinSize: { value: layerState.brightOverlay.params.uEffectMinSize },
+    uEffectMaxSize: { value: layerState.brightOverlay.params.uEffectMaxSize },
     uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness },
     uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness },
-    uSmallBlinkThreshold: { value: layerState.brightOverlay.params.uSmallBlinkThreshold },
   };
   layerState.bakedStars.uniforms = bakeUniforms;
   layerState.brightOverlay.uniforms = overlayUniforms;
@@ -508,18 +505,16 @@ export function createStarfield({ renderer, scene, requestRender }) {
     stats.bakedStarLayerDrawCalls = layerState.bakedStars.enabled ? patchDescriptors.length : 0;
     stats.bakedStarLayerRadius = layerState.bakedStars.radius;
     stats.bakedStarLayerDensity = layerState.bakedStars.params.uDensity;
-    stats.bakedStarLayerSparsity = layerState.bakedStars.params.uSparsity;
     stats.bakedStarLayerSeed = layerState.bakedStars.params.uSeed;
     stats.bakedStarLayerStarCount = catalogStarCount(bakeUniforms);
     stats.overlayLayerDensity = layerState.brightOverlay.params.uDensity;
-    stats.overlayLayerSparsity = layerState.brightOverlay.params.uSparsity;
     stats.overlayLayerSeed = layerState.brightOverlay.params.uSeed;
     stats.overlayLayerStarCount = catalogStarCount(overlayUniforms);
     stats.winkleAmount = layerState.brightOverlay.params.uWinkleAmount;
-    stats.winkleMinSize = layerState.brightOverlay.params.uWinkleMinSize;
+    stats.effectMinSize = layerState.brightOverlay.params.uEffectMinSize;
+    stats.effectMaxSize = layerState.brightOverlay.params.uEffectMaxSize;
     stats.winkleSharpness = layerState.brightOverlay.params.uWinkleSharpness;
     stats.winkleFlashiness = layerState.brightOverlay.params.uWinkleFlashiness;
-    stats.smallBlinkThreshold = layerState.brightOverlay.params.uSmallBlinkThreshold;
     stats.overlayCatalogDirty = overlayCatalogDirty;
   }
 
@@ -945,10 +940,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
     if (layerId === "brightOverlay") {
       if (
         key === "uWinkleAmount"
-        || key === "uWinkleMinSize"
+        || key === "uEffectMinSize"
+        || key === "uEffectMaxSize"
         || key === "uWinkleSharpness"
         || key === "uWinkleFlashiness"
-        || key === "uSmallBlinkThreshold"
       ) {
         if (key === "uWinkleAmount") {
           starLayers.setWinkleAmount(nextValue);
