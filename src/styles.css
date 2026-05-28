@@ -375,6 +375,27 @@ select {
   font-weight: 700;
 }
 
+#fps-meter {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 12;
+  min-width: 64px;
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: rgba(7, 10, 16, 0.78);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 #gpu-stats {
   position: fixed;
   bottom: 38px;
@@ -423,6 +444,11 @@ select {
     right: 12px;
     bottom: auto;
     left: 12px;
+    top: 48px;
+  }
+
+  #fps-meter {
     top: 12px;
+    left: 12px;
   }
 }

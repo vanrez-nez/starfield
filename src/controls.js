@@ -8,6 +8,23 @@ const PARAMS = [
   { key: "maxPatchSize", label: "Max Patch Size", min: 256, max: 8192, step: 256, format: (v) => v.toFixed(0), kind: "adaptive" },
   { key: "patchBudgetMb", label: "Patch Budget", min: 16, max: 512, step: 16, format: (v) => `${v.toFixed(0)} MB`, kind: "adaptive" },
   { key: "centerBias", label: "Center Bias", min: 0, max: 1, step: 0.05, format: (v) => v.toFixed(2), kind: "adaptive" },
+  {
+    key: "sparseMode",
+    label: "Sparse Mode",
+    kind: "adaptiveSelect",
+    options: [
+      { value: "full", label: "Full Grid" },
+      { value: "visible", label: "Visible Only" },
+      { value: "center", label: "Center Weighted" },
+      { value: "density", label: "Density Weighted" },
+    ],
+    format: (v) => ({
+      full: "Full",
+      visible: "Visible",
+      center: "Center",
+      density: "Density",
+    }[v] ?? "Full"),
+  },
   { group: "Field" },
   { key: "uDensity", label: "Density", min: 10, max: 360, step: 1, format: (v) => v.toFixed(0) },
   { key: "uSparsity", label: "Sparsity", min: 0, max: 0.97, step: 0.005, format: (v) => v.toFixed(3) },
@@ -70,9 +87,21 @@ function formatGpuStatsForPanel(stats) {
     `Count: ${stats.patchDescriptorCount ?? stats.patchCount ?? 0}`,
     `Resident: ${stats.residentPatchCount ?? 0}`,
     `Allocated: ${stats.allocatedPatchCount ?? 0}`,
+    `Fallbacks: ${stats.fallbackPatchCount ?? 0}`,
+    `Next Targets: ${stats.nextTargetPatchCount ?? 0}`,
+    `Downgraded: ${stats.downgradedPatchCount ?? 0}`,
     `States: ${stats.patchStateSummary ?? "none"}`,
     `Allocations: ${stats.allocationStateSummary ?? "none"}`,
+    `Required Buckets: ${stats.descriptorRequiredBucketSummary ?? "none"}`,
+    `Target Buckets: ${stats.descriptorTargetBucketSummary ?? "none"}`,
     `Density Pressure: ${formatNumber(stats.descriptorDensityPressure, 4)}/px`,
+    `Density Fallbacks: ${stats.descriptorDensityFallbackCount ?? 0}`,
+    `Bright Pressure: ${formatNumber(stats.descriptorBrightStarPressure, 4)}/px`,
+    "",
+    "Priority",
+    `Highest: ${stats.highestPriorityPatch ?? "none"}`,
+    `Range: ${formatNumber(stats.lowestPriority, 1)}-${formatNumber(stats.highestPriority, 1)}`,
+    `Top: ${stats.topPrioritySummary ?? "none"}`,
     "",
     "Adaptive",
     `Enabled: ${stats.adaptiveResolution ? "yes" : "no"}`,
@@ -80,6 +109,15 @@ function formatGpuStatsForPanel(stats) {
     `Patch Limits: ${formatInteger(stats.minPatchSize)}-${formatInteger(stats.maxPatchSize)}`,
     `Patch Budget: ${stats.patchBudgetMemory ?? "0 B"}`,
     `Center Bias: ${formatNumber(stats.centerBias, 2)}`,
+    `Sparse Mode: ${stats.sparseMode ?? "full"}`,
+    `Effective Sparse: ${stats.effectiveSparseMode ?? "full"}`,
+    `Sparse Wanted: ${stats.sparseWantedPatchCount ?? 0}`,
+    `Sparse Resident: ${stats.sparseResidentPatchCount ?? 0}`,
+    `Sparse Evicted: ${stats.sparseEvictedPatchCount ?? 0}`,
+    `Sparse Fallbacks: ${stats.sparseFallbackPatchCount ?? 0}`,
+    `Sparse Visible: ${stats.sparseVisiblePatchCount ?? 0}`,
+    `Sparse Budget: ${stats.sparseBudgetUsedMemory ?? "0 B"} (${formatPercent(stats.sparseBudgetRatio)})`,
+    `Sparse Selection: ${stats.sparseSelectionSummary ?? "none"}`,
     `Recommended Raster: ${stats.recommendedActualRasterSize ?? "0x0"}`,
     `Recommended Storage: ${stats.recommendedPatchStorageSize ?? "0x0"}`,
     `Recommended Resident: ${stats.recommendedResidentTextureMemory ?? "0 B"} (${formatPercent(stats.recommendedResidentBudgetRatio)})`,
@@ -107,11 +145,51 @@ function formatGpuStatsForPanel(stats) {
     `Density Scale: ${formatNumber(stats.densityScale, 2)}x`,
     `Density Fallback: ${stats.densityFallbackWarning ? "yes" : "no"}`,
     "",
+    "Catalog Classes",
+    `Tiny: ${formatInteger(stats.tinyStarCount)}`,
+    `Normal: ${formatInteger(stats.normalStarCount)}`,
+    `Bright: ${formatInteger(stats.brightStarClassCount)}`,
+    `Hero: ${formatInteger(stats.heroStarCount)}`,
+    `Density Candidates: ${formatInteger(stats.densityCandidateStarCount)}`,
+    `Baked Candidates: ${formatInteger(stats.bakedCandidateStarCount)}`,
+    `Overlay Candidates: ${formatInteger(stats.overlayCandidateStarCount)}`,
+    `Overlay Enabled: ${stats.overlayEnabled ? "yes" : "no"}`,
+    `Overlay Stars: ${formatInteger(stats.overlayStarCount)}`,
+    `Overlay Instances: ${formatInteger(stats.overlayStarInstances)}`,
+    `Overlay Tris: ${formatInteger(stats.overlayTriangleCount)}`,
+    `Overlay Draws: ${formatInteger(stats.overlayDrawCalls)}`,
+    `Tile Aware: ${stats.tileAwareGeneration ? "yes" : "no"}`,
+    `Query Grid: ${stats.starQueryGrid ?? "0x0"}`,
+    `Last Query Patch: ${stats.lastStarQueryPatchId ?? "none"}`,
+    `Last Query Stars: ${formatInteger(stats.lastStarQueryStarCount)}`,
+    `Last Query Instances: ${formatInteger(stats.lastStarQueryInstanceCount)}`,
+    `Last Query Cells: ${formatInteger(stats.lastStarQueryCellCount)}`,
+    `Patch Query Stars: ${stats.queriedPatchStarSummary ?? "none"}`,
+    `Summary: ${stats.starClassSummary ?? "none"}`,
+    "",
+    "Star Policy",
+    `Min Core Pixels: ${formatNumber(stats.minCorePixels, 2)}`,
+    `Min Glare Pixels: ${formatNumber(stats.minGlarePixels, 2)}`,
+    `Density Threshold: ${formatNumber(stats.subpixelDensityThresholdPx, 2)}px`,
+    `AA Pin Threshold: ${formatNumber(stats.aaPinThresholdPx, 2)}px`,
+    `Subpixel Mode: ${stats.subpixelEnergyMode ?? "density-pin-normal"}`,
+    "",
     "Memory Budget",
     `Resident: ${stats.residentTextureMemory ?? "0 B"} (${formatPercent(stats.residentBudgetRatio)})`,
     `Bake Scratch: ${stats.bakeScratchMemory ?? "0 B"}`,
-    `Pooled Targets: ${stats.pooledTargetMemory ?? "0 B"}`,
+    `Pooled Memory: ${stats.pooledTargetMemory ?? "0 B"}`,
     `Total Allocated: ${stats.totalAllocatedMemory ?? "0 B"} (${formatPercent(stats.totalAllocatedBudgetRatio)})`,
+    `Active Targets: ${stats.activeTargetCount ?? 0}`,
+    `Pooled Targets: ${stats.pooledTargetCount ?? 0}`,
+    `Pooled Buckets: ${stats.pooledTargetSummary ?? "none"}`,
+    `Alloc Count: ${stats.allocationCount ?? 0}`,
+    `Bake Jobs: ${stats.activeBakeJobs ?? 0} active / ${stats.pendingBakeJobs ?? 0} pending`,
+    `Active Blends: ${stats.activeBlendCount ?? 0}`,
+    `Active Job: ${stats.activeBakeJobId ?? "none"}`,
+    `Completed Jobs: ${stats.completedBakeJobs ?? 0}/${stats.totalQueuedBakeJobs ?? 0}`,
+    `Jobs/Frame: ${stats.maxBakeJobsPerFrame ?? 0}`,
+    `Queue Idle: ${stats.queueIdle ? "yes" : "no"}`,
+    `Pending Top: ${stats.pendingBakeJobSummary ?? "none"}`,
     `Resident Over Budget: ${stats.residentBudgetExceeded ? "yes" : "no"}`,
     `Total Over Budget: ${stats.totalAllocatedBudgetExceeded ? "yes" : "no"}`,
   ].join("\n");
@@ -241,6 +319,46 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     paint(input.checked);
   }
 
+  function addSelectRow(param) {
+    const row = document.createElement("div");
+    row.className = "row row--select";
+
+    const top = document.createElement("div");
+    top.className = "top";
+
+    const label = document.createElement("label");
+    label.textContent = param.label;
+
+    const value = document.createElement("span");
+    value.className = "val";
+
+    const select = document.createElement("select");
+    select.id = `control-${param.key}`;
+    label.htmlFor = select.id;
+
+    param.options.forEach((option) => {
+      const optionElement = document.createElement("option");
+      optionElement.value = option.value;
+      optionElement.textContent = option.label;
+      optionElement.selected = option.value === starfield.defaults[param.key];
+      select.append(optionElement);
+    });
+
+    function paint(nextValue) {
+      value.textContent = param.format(nextValue);
+    }
+
+    select.addEventListener("change", () => {
+      paint(select.value);
+      starfield.setAdaptiveParam(param.key, select.value);
+    });
+
+    top.append(label, value);
+    row.append(top, select);
+    rows.append(row);
+    paint(select.value);
+  }
+
   function addTextureSizeRow() {
     const readouts = starfield.getReadouts();
     const row = document.createElement("div");
@@ -289,6 +407,11 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
 
       if (param.kind === "adaptiveToggle") {
         addToggleRow(param);
+        return;
+      }
+
+      if (param.kind === "adaptiveSelect") {
+        addSelectRow(param);
         return;
       }
 
