@@ -2,6 +2,7 @@ import * as THREE from "three";
 import {
   AA_PIN_THRESHOLD_PX,
   GAUSSIAN_CUTOFF_SIGMA,
+  LIGHT_COMPOSITION_MAX_ANCHORS,
   MIN_CORE_PIXELS,
   MIN_GLARE_PIXELS,
   STAR_SIZE_BRIGHTNESS_LINK,
@@ -685,17 +686,277 @@ const DOWNSAMPLE_FRAGMENT_SHADER = /* glsl */ `
 `;
 
 const SKY_BACKGROUND_VERTEX_SHADER = /* glsl */ `
+  varying vec3 vDirection;
+  varying vec2 vUv;
+
   void main() {
+    vDirection = position;
+    vUv = uv;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
-const SKY_BACKGROUND_FRAGMENT_SHADER = /* glsl */ `
-  precision highp float;
+const LIGHT_COMPOSITION_BAKE_VERTEX_SHADER = /* glsl */ `
+  varying vec3 vDirection;
+  varying vec2 vUv;
 
   void main() {
-    vec3 background = vec3(0.004, 0.005, 0.011);
-    vec3 mapped = 1.0 - exp(-background);
+    vDirection = vec3(0.0, 0.0, 1.0);
+    vUv = position.xy * 0.5 + 0.5;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`;
+
+const SKY_BACKGROUND_FRAGMENT_SHADER = /* glsl */ `
+  #define MAX_ANCHORS ${LIGHT_COMPOSITION_MAX_ANCHORS}
+  precision highp float;
+
+  varying vec3 vDirection;
+  varying vec2 vUv;
+
+  uniform int uUseTileUv;
+  uniform vec2 uTileUvMin;
+  uniform vec2 uTileUvSize;
+  uniform int uAnchorCount;
+  uniform int uBlend;
+  uniform float uPower;
+  uniform float uSigma;
+  uniform float uColorWarpAmp;
+  uniform float uColorWarpFreq;
+  uniform vec3 uAnchorDir[MAX_ANCHORS];
+  uniform vec3 uAnchorColor[MAX_ANCHORS];
+
+  uniform float uSeed;
+  uniform float uCoverage;
+  uniform float uDensity;
+  uniform float uSoftness;
+  uniform float uContrast;
+  uniform float uBaseScale;
+  uniform int uOctaves;
+  uniform float uOpacity;
+
+  uniform float uLightFocus;
+  uniform float uLightLining;
+  uniform float uLightIntensity;
+  uniform float uNebulaStrength;
+  uniform float uNebulaExposure;
+  uniform vec3 uCloudShadow;
+  uniform vec3 uCloudHighlight;
+  uniform vec3 uCloudCore;
+
+  const float PI = 3.14159265359;
+
+  vec3 equirectDirectionFromUv(vec2 uv) {
+    float phi = (uv.x - 0.5) * PI * 2.0;
+    float theta = uv.y * PI;
+    float sinTheta = sin(theta);
+    return normalize(vec3(sin(phi) * sinTheta, cos(theta), cos(phi) * sinTheta));
+  }
+
+  vec3 hash33(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+  }
+
+  vec4 noised(vec3 x) {
+    vec3 i = floor(x);
+    vec3 f = fract(x);
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    vec3 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+
+    vec3 ga = normalize(hash33(i + vec3(0.0, 0.0, 0.0)));
+    vec3 gb = normalize(hash33(i + vec3(1.0, 0.0, 0.0)));
+    vec3 gc = normalize(hash33(i + vec3(0.0, 1.0, 0.0)));
+    vec3 gd = normalize(hash33(i + vec3(1.0, 1.0, 0.0)));
+    vec3 ge = normalize(hash33(i + vec3(0.0, 0.0, 1.0)));
+    vec3 gf = normalize(hash33(i + vec3(1.0, 0.0, 1.0)));
+    vec3 gg = normalize(hash33(i + vec3(0.0, 1.0, 1.0)));
+    vec3 gh = normalize(hash33(i + vec3(1.0, 1.0, 1.0)));
+
+    float va = dot(ga, f - vec3(0.0, 0.0, 0.0));
+    float vb = dot(gb, f - vec3(1.0, 0.0, 0.0));
+    float vc = dot(gc, f - vec3(0.0, 1.0, 0.0));
+    float vd = dot(gd, f - vec3(1.0, 1.0, 0.0));
+    float ve = dot(ge, f - vec3(0.0, 0.0, 1.0));
+    float vf = dot(gf, f - vec3(1.0, 0.0, 1.0));
+    float vg = dot(gg, f - vec3(0.0, 1.0, 1.0));
+    float vh = dot(gh, f - vec3(1.0, 1.0, 1.0));
+
+    float v = va
+      + u.x * (vb - va)
+      + u.y * (vc - va)
+      + u.z * (ve - va)
+      + u.x * u.y * (va - vb - vc + vd)
+      + u.y * u.z * (va - vc - ve + vg)
+      + u.z * u.x * (va - vb - ve + vf)
+      + u.x * u.y * u.z * (-va + vb + vc - vd + ve - vf - vg + vh);
+
+    vec3 d = ga
+      + u.x * (gb - ga)
+      + u.y * (gc - ga)
+      + u.z * (ge - ga)
+      + u.x * u.y * (ga - gb - gc + gd)
+      + u.y * u.z * (ga - gc - ge + gg)
+      + u.z * u.x * (ga - gb - ge + gf)
+      + u.x * u.y * u.z * (-ga + gb + gc - gd + ge - gf - gg + gh)
+      + du * (
+        vec3(vb - va, vc - va, ve - va)
+        + u.yzx * vec3(va - vb - vc + vd, va - vc - ve + vg, va - vb - ve + vf)
+        + u.zxy * vec3(va - vb - ve + vf, va - vb - vc + vd, va - vc - ve + vg)
+        + u.yzx * u.zxy * (-va + vb + vc - vd + ve - vf - vg + vh)
+      );
+
+    return vec4(v, d);
+  }
+
+  float noise01(vec3 p) {
+    return noised(p).x * 0.5 + 0.5;
+  }
+
+  float fbm(vec3 p, float lacunarity, float gain) {
+    float sum = 0.0;
+    float amp = 0.5;
+    float norm = 0.0;
+    mat3 rot = mat3(
+      0.00,  0.80,  0.60,
+     -0.80,  0.36, -0.48,
+     -0.60, -0.48,  0.64
+    );
+
+    for (int i = 0; i < 8; i++) {
+      if (i >= uOctaves) break;
+      sum += amp * noise01(p);
+      norm += amp;
+      p = rot * p * lacunarity + vec3(17.31, -11.73, 7.19);
+      amp *= gain;
+    }
+
+    return norm > 0.0 ? sum / norm : 0.0;
+  }
+
+  vec3 warpVec(vec3 p) {
+    return vec3(
+      fbm(p + vec3(0.0, 0.0, 0.0), 2.02, 0.52),
+      fbm(p + vec3(5.2, 1.3, 7.1), 2.03, 0.50),
+      fbm(p + vec3(9.1, 8.4, 2.8), 2.01, 0.51)
+    ) * 2.0 - 1.0;
+  }
+
+  vec3 colorWarp(vec3 dir) {
+    if (uColorWarpAmp <= 0.0) return dir;
+    vec3 offset = warpVec(dir * uColorWarpFreq + vec3(uSeed, uSeed * 0.37, -uSeed * 0.21));
+    return normalize(dir + offset * uColorWarpAmp);
+  }
+
+  vec3 fieldGradient(vec3 dir) {
+    vec3 d = colorWarp(dir);
+    vec3 acc = vec3(0.0);
+    float weightSum = 0.0;
+
+    for (int i = 0; i < MAX_ANCHORS; i++) {
+      if (i >= uAnchorCount) break;
+      float dist = 1.0 - dot(d, normalize(uAnchorDir[i]));
+      float weight = 0.0;
+      if (uBlend == 0) {
+        weight = 1.0 / pow(dist + 0.0001, uPower);
+      } else {
+        weight = exp(-(dist * dist) / max(0.0001, 2.0 * uSigma * uSigma));
+      }
+      acc += uAnchorColor[i] * weight;
+      weightSum += weight;
+    }
+
+    return weightSum > 0.0 ? acc / weightSum : vec3(0.0);
+  }
+
+  vec3 lcHash3(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return fract(sin(p) * 43758.5453);
+  }
+
+  float lcNoise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float n000 = lcHash3(i + vec3(0.0, 0.0, 0.0)).x;
+    float n100 = lcHash3(i + vec3(1.0, 0.0, 0.0)).x;
+    float n010 = lcHash3(i + vec3(0.0, 1.0, 0.0)).x;
+    float n110 = lcHash3(i + vec3(1.0, 1.0, 0.0)).x;
+    float n001 = lcHash3(i + vec3(0.0, 0.0, 1.0)).x;
+    float n101 = lcHash3(i + vec3(1.0, 0.0, 1.0)).x;
+    float n011 = lcHash3(i + vec3(0.0, 1.0, 1.0)).x;
+    float n111 = lcHash3(i + vec3(1.0, 1.0, 1.0)).x;
+
+    return mix(
+      mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+      mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+      f.z
+    );
+  }
+
+  float lcFbm(vec3 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    float norm = 0.0;
+
+    for (int i = 0; i < 5; i++) {
+      sum += amp * lcNoise3(p);
+      norm += amp;
+      p *= 2.02;
+      amp *= 0.5;
+    }
+
+    return sum / norm;
+  }
+
+  float lightCompositionCloudField(vec3 dir) {
+    vec3 seedOffset = vec3(uSeed * 13.17, uSeed * -7.31, uSeed * 5.19);
+    vec3 p = dir * max(uBaseScale, 0.001) + seedOffset;
+    vec3 q = vec3(
+      lcFbm(p),
+      lcFbm(p + vec3(5.2, 1.3, 2.8)),
+      lcFbm(p + vec3(2.1, 4.7, 9.2))
+    );
+    return lcFbm(p + 3.0 * q);
+  }
+
+  float lightCompositionDensityField(vec3 dir) {
+    float f = lightCompositionCloudField(dir);
+    float coverage = clamp(uCoverage, 0.02, 0.98);
+    float d = smoothstep(coverage, coverage + max(uSoftness, 0.001), f);
+    d = pow(clamp(d, 0.0, 1.0), max(uContrast, 0.05));
+    return clamp(d, 0.0, 1.0);
+  }
+
+  vec4 lightCompositionNebula(vec3 dir) {
+    float density = lightCompositionDensityField(normalize(dir));
+    vec3 lightField = fieldGradient(normalize(dir));
+    float lightMask = clamp(max(max(lightField.r, lightField.g), lightField.b) * max(uLightIntensity, 0.0), 0.0, 1.0);
+    float lit = pow(lightMask, max(uLightFocus, 0.001));
+
+    vec3 highlight = lightField * uCloudHighlight * max(uLightIntensity, 0.0);
+    vec3 color = mix(uCloudShadow, highlight, lit);
+    color = mix(color, uCloudCore, clamp(density * 0.4, 0.0, 1.0));
+
+    float lining = lit * (1.0 - density);
+    color += lightField * lining * max(uLightLining, 0.0) * max(uLightIntensity, 0.0);
+    color *= max(uDensity, 0.0);
+
+    return vec4(pow(max(color, 0.0), vec3(0.92)), density * uOpacity);
+  }
+
+  void main() {
+    vec2 skyUv = uTileUvMin + vUv * uTileUvSize;
+    vec3 dir = uUseTileUv == 1 ? equirectDirectionFromUv(skyUv) : normalize(vDirection);
+    vec4 nebula = lightCompositionNebula(dir);
+    vec3 baseLinear = vec3(0.004, 0.005, 0.011);
+    vec3 colorLinear = baseLinear + nebula.rgb * clamp(nebula.a, 0.0, 1.0) * max(uNebulaStrength, 0.0);
+    vec3 mapped = 1.0 - exp(-max(colorLinear, vec3(0.0)) * max(uNebulaExposure, 0.001));
     gl_FragColor = vec4(mapped, 1.0);
   }
 `;
@@ -797,12 +1058,29 @@ export function createDownsampleMaterial(uniforms) {
   });
 }
 
-export function createSkyBackgroundMaterial() {
+export function createSkyBackgroundMaterial(uniforms) {
   return new THREE.ShaderMaterial({
+    uniforms: {
+      ...uniforms,
+      uUseTileUv: { value: 0 },
+    },
     side: THREE.BackSide,
     depthWrite: false,
     depthTest: false,
     vertexShader: SKY_BACKGROUND_VERTEX_SHADER,
+    fragmentShader: SKY_BACKGROUND_FRAGMENT_SHADER,
+  });
+}
+
+export function createLightCompositionBakeMaterial(uniforms) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      ...uniforms,
+      uUseTileUv: { value: 1 },
+    },
+    depthWrite: false,
+    depthTest: false,
+    vertexShader: LIGHT_COMPOSITION_BAKE_VERTEX_SHADER,
     fragmentShader: SKY_BACKGROUND_FRAGMENT_SHADER,
   });
 }
@@ -834,6 +1112,33 @@ export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
     blendEquationAlpha: THREE.AddEquation,
     blendSrcAlpha: THREE.OneFactor,
     blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+    depthWrite: false,
+    depthTest: false,
+    vertexShader: PATCH_DOME_VERTEX_SHADER,
+    fragmentShader: PATCH_DOME_FRAGMENT_SHADER,
+  });
+}
+
+export function createBackgroundPatchDomeMaterial({ descriptor, visibleTarget }) {
+  const sampling = visibleTarget.starfieldSampling ?? {
+    innerOffset: descriptor.innerOffset,
+    innerScale: descriptor.innerScale,
+  };
+
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uCurrentTexture: { value: visibleTarget.texture },
+      uNextTexture: { value: visibleTarget.texture },
+      uBlend: { value: 0 },
+      uContentUvMin: { value: descriptor.uvMin.clone() },
+      uContentUvSize: { value: descriptor.uvSize.clone() },
+      uCurrentInnerOffset: { value: sampling.innerOffset.clone() },
+      uCurrentInnerScale: { value: sampling.innerScale.clone() },
+      uNextInnerOffset: { value: sampling.innerOffset.clone() },
+      uNextInnerScale: { value: sampling.innerScale.clone() },
+    },
+    side: THREE.BackSide,
+    transparent: false,
     depthWrite: false,
     depthTest: false,
     vertexShader: PATCH_DOME_VERTEX_SHADER,

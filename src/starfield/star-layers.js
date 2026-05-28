@@ -3,9 +3,7 @@ import {
   BRIGHT_STAR_OVERLAY_STRENGTH,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
   DEFAULT_WINKLE_AMOUNT,
-  DEFAULT_SKY_BACKGROUND_RADIUS,
   WINKLE_MAX_COUNT,
-  sphereVerticalSegmentsFor,
 } from "./constants.js";
 import {
   createCatalogOverlayAndStats,
@@ -14,7 +12,6 @@ import {
 } from "./catalog.js";
 import {
   createOverlayMaterial,
-  createSkyBackgroundMaterial,
   createWinkleMaterial,
 } from "./shaders.js";
 
@@ -56,20 +53,10 @@ export function createStarLayerManager({
   scene,
   overlayUniforms,
   requestRender,
-  backgroundRadius = DEFAULT_SKY_BACKGROUND_RADIUS,
   overlayRadius = DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
-  sphereSegments = 32,
 }) {
   const layers = new Map();
-  let currentSphereSegments = Number.isFinite(sphereSegments) ? sphereSegments : 32;
-  let currentBackgroundRadius = Number.isFinite(backgroundRadius) ? backgroundRadius : DEFAULT_SKY_BACKGROUND_RADIUS;
   let currentOverlayRadius = Number.isFinite(overlayRadius) ? overlayRadius : DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS;
-  let backgroundLayerStats = {
-    backgroundLayerEnabled: true,
-    backgroundLayerDrawCalls: 1,
-    backgroundLayerTriangles: 0,
-    backgroundLayerRadius: currentBackgroundRadius,
-  };
   let brightOverlayEnabled = false;
   let brightOverlayStats = {
     overlayEnabled: false,
@@ -90,43 +77,6 @@ export function createStarLayerManager({
     winkleDrawCalls: 0,
     winkleTriangles: 0,
   };
-
-  function triangleCountForGeometry(geometry) {
-    if (geometry.index) return Math.round(geometry.index.count / 3);
-    return Math.round((geometry.attributes.position?.count ?? 0) / 3);
-  }
-
-  function createBackgroundGeometry() {
-    const horizontalSegments = Math.max(8, Math.round(currentSphereSegments));
-    return new THREE.SphereGeometry(
-      currentBackgroundRadius,
-      horizontalSegments,
-      sphereVerticalSegmentsFor(horizontalSegments),
-    );
-  }
-
-  function syncBackgroundStats() {
-    const visible = skyBackground.mesh.visible;
-    backgroundLayerStats = {
-      backgroundLayerEnabled: visible,
-      backgroundLayerDrawCalls: visible ? 1 : 0,
-      backgroundLayerTriangles: visible ? triangleCountForGeometry(skyBackground.geometry) : 0,
-      backgroundLayerRadius: currentBackgroundRadius,
-    };
-  }
-
-  const skyBackground = {
-    id: "skyBackground",
-    geometry: createBackgroundGeometry(),
-    material: createSkyBackgroundMaterial(),
-    mesh: null,
-  };
-  skyBackground.mesh = new THREE.Mesh(skyBackground.geometry, skyBackground.material);
-  skyBackground.mesh.frustumCulled = false;
-  skyBackground.mesh.renderOrder = -10;
-  scene.add(skyBackground.mesh);
-  layers.set(skyBackground.id, skyBackground);
-  syncBackgroundStats();
 
   const brightOverlayUniforms = {
     uRadius: { value: currentOverlayRadius },
@@ -276,13 +226,6 @@ export function createStarLayerManager({
   }
 
   function setLayerEnabled(layerId, enabled) {
-    if (layerId === "skyBackground") {
-      skyBackground.mesh.visible = Boolean(enabled);
-      syncBackgroundStats();
-      requestRender();
-      return;
-    }
-
     if (layerId === "brightOverlay") {
       setEnabled(enabled);
     }
@@ -291,17 +234,6 @@ export function createStarLayerManager({
   function setLayerRadius(layerId, value) {
     const nextValue = Number(value);
     if (!Number.isFinite(nextValue) || nextValue <= 0) return;
-
-    if (layerId === "skyBackground") {
-      currentBackgroundRadius = nextValue;
-      const nextGeometry = createBackgroundGeometry();
-      skyBackground.mesh.geometry = nextGeometry;
-      skyBackground.geometry.dispose();
-      skyBackground.geometry = nextGeometry;
-      syncBackgroundStats();
-      requestRender();
-      return;
-    }
 
     if (layerId === "brightOverlay") {
       currentOverlayRadius = nextValue;
@@ -314,13 +246,10 @@ export function createStarLayerManager({
   }
 
   function setSphereSegments(value) {
-    currentSphereSegments = Number.isFinite(value) ? value : currentSphereSegments;
-    const nextGeometry = createBackgroundGeometry();
-    skyBackground.mesh.geometry = nextGeometry;
-    skyBackground.geometry.dispose();
-    skyBackground.geometry = nextGeometry;
-    syncBackgroundStats();
-    requestRender();
+    void value;
+  }
+
+  function refreshBackgroundStats() {
   }
 
   function setWinkleAmount(value) {
@@ -342,7 +271,6 @@ export function createStarLayerManager({
 
   function collectStats() {
     return {
-      ...backgroundLayerStats,
       ...brightOverlayStats,
       ...winkleStats,
       effectMinSize: overlayUniforms.uEffectMinSize?.value ?? 0,
@@ -367,6 +295,7 @@ export function createStarLayerManager({
     setLayerEnabled,
     setLayerRadius,
     setSphereSegments,
+    refreshBackgroundStats,
     setWinkleAmount,
     advanceRuntime,
     collectStats,

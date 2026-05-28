@@ -35,6 +35,41 @@ export const DEFAULT_EFFECT_MAX_SIZE = 0.75;
 export const DEFAULT_SKY_BACKGROUND_RADIUS = DOME_RADIUS;
 export const DEFAULT_BAKED_STAR_RADIUS = DOME_RADIUS;
 export const DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS = DOME_RADIUS * BRIGHT_STAR_OVERLAY_RADIUS_SCALE;
+export const LIGHT_COMPOSITION_MAX_ANCHORS = 8;
+export const DEFAULT_LIGHT_COMPOSITION_BACKGROUND = Object.freeze({
+  uSeed: 2.4,
+  uCoverage: 0.42,
+  uDensity: 1.1,
+  uSoftness: 0.28,
+  uContrast: 1.35,
+  uBaseScale: 2.4,
+  uOctaves: 4,
+  uOpacity: 1,
+  uLightFocus: 1.55,
+  uLightLining: 0.22,
+  uLightIntensity: 0.85,
+  uNebulaStrength: 4,
+  uNebulaExposure: 2.4,
+  uColorWarpAmp: 0.045,
+  uColorWarpFreq: 2.2,
+  uCloudShadow: [0.004, 0.006, 0.018],
+  uCloudHighlight: [0.3, 0.36, 0.72],
+  uCloudCore: [0.025, 0.03, 0.07],
+});
+export const DEFAULT_FIELD_GRADIENT = Object.freeze({
+  type: "gradient",
+  mode: "field",
+  blend: "gaussian",
+  sigma: 0.34,
+  power: 2,
+  warp: { amp: DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uColorWarpAmp, freq: DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uColorWarpFreq },
+  anchors: [
+    { dir: [0.26, 0.18, 0.95], color: [0.14, 0.19, 0.46] },
+    { dir: [-0.72, 0.34, 0.6], color: [0.18, 0.08, 0.22] },
+    { dir: [0.62, -0.46, -0.64], color: [0.05, 0.12, 0.28] },
+    { dir: [-0.18, -0.82, -0.54], color: [0.13, 0.15, 0.2] },
+  ],
+});
 export const MAX_BAKE_JOBS_PER_FRAME = 1;
 export const CAMERA_REQUEUE_ANGLE_DEG = 8;
 export const CAMERA_MOTION_EPSILON_DEG = 0.05;

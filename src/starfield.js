@@ -3,19 +3,23 @@ import {
   ALLOCATION_STATES,
   BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
   BRIGHT_STAR_OVERLAY_ENABLED,
+  CAMERA_BAKE_IDLE_MS,
   CATALOG_PARAMS,
   DEFAULT_ADAPTIVE_QUALITY,
   DEFAULT_BAKED_STAR_RADIUS,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
   DEFAULT_EFFECT_MAX_SIZE,
   DEFAULT_EFFECT_MIN_SIZE,
+  DEFAULT_FIELD_GRADIENT,
   DEFAULT_LARGE_STAR_RARITY,
+  DEFAULT_LIGHT_COMPOSITION_BACKGROUND,
   DEFAULT_WINKLE_AMOUNT,
   DEFAULT_WINKLE_FLASHINESS,
   DEFAULT_WINKLE_SHARPNESS,
   DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
+  LIGHT_COMPOSITION_MAX_ANCHORS,
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
   SPARSE_PATCH_MODES,
@@ -40,7 +44,9 @@ import {
 } from "./starfield/catalog.js";
 import { createRenderTargetManager } from "./starfield/render-targets.js";
 import {
+  createBackgroundPatchDomeMaterial,
   createDownsampleMaterial,
+  createLightCompositionBakeMaterial,
   createStarMaterial,
 } from "./starfield/shaders.js";
 import { createSkydomeManager } from "./starfield/skydome.js";
@@ -56,6 +62,72 @@ import {
   updateSphereSegmentStats,
 } from "./starfield/stats.js";
 import { createBakePipeline } from "./starfield/bake-pipeline.js";
+import { createBackgroundBakePipeline } from "./starfield/background-bake-pipeline.js";
+
+function vectorFromArray(value, fallback = [0, 0, 0]) {
+  const source = Array.isArray(value) && value.length >= 3 ? value : fallback;
+  return new THREE.Vector3(source[0], source[1], source[2]);
+}
+
+function normalizedVectorFromArray(value, fallback = [0, 0, 1]) {
+  const vector = vectorFromArray(value, fallback);
+  if (vector.lengthSq() < 1e-8) return vectorFromArray(fallback).normalize();
+  return vector.normalize();
+}
+
+function applyFieldGradientToUniforms(uniforms, gradient = DEFAULT_FIELD_GRADIENT) {
+  const anchors = Array.isArray(gradient.anchors) ? gradient.anchors.slice(0, LIGHT_COMPOSITION_MAX_ANCHORS) : [];
+  uniforms.uAnchorCount.value = anchors.length;
+  uniforms.uBlend.value = gradient.blend === "gaussian" ? 1 : 0;
+  uniforms.uPower.value = Number.isFinite(gradient.power) ? gradient.power : 2;
+  uniforms.uSigma.value = Number.isFinite(gradient.sigma) ? gradient.sigma : 0.34;
+  uniforms.uColorWarpAmp.value = Number.isFinite(gradient.warp?.amp)
+    ? gradient.warp.amp
+    : uniforms.uColorWarpAmp.value;
+  uniforms.uColorWarpFreq.value = Number.isFinite(gradient.warp?.freq)
+    ? gradient.warp.freq
+    : uniforms.uColorWarpFreq.value;
+
+  for (let index = 0; index < LIGHT_COMPOSITION_MAX_ANCHORS; index += 1) {
+    const anchor = anchors[index];
+    uniforms.uAnchorDir.value[index].copy(normalizedVectorFromArray(anchor?.dir));
+    uniforms.uAnchorColor.value[index].copy(vectorFromArray(anchor?.color));
+  }
+}
+
+function createLightCompositionUniforms(params, gradient = DEFAULT_FIELD_GRADIENT) {
+  const uniforms = {
+    uTileUvMin: { value: new THREE.Vector2(0, 0) },
+    uTileUvSize: { value: new THREE.Vector2(1, 1) },
+    uAnchorCount: { value: 0 },
+    uBlend: { value: 1 },
+    uPower: { value: 2 },
+    uSigma: { value: 0.34 },
+    uColorWarpAmp: { value: params.uColorWarpAmp },
+    uColorWarpFreq: { value: params.uColorWarpFreq },
+    uAnchorDir: { value: Array.from({ length: LIGHT_COMPOSITION_MAX_ANCHORS }, () => new THREE.Vector3(0, 0, 1)) },
+    uAnchorColor: { value: Array.from({ length: LIGHT_COMPOSITION_MAX_ANCHORS }, () => new THREE.Vector3()) },
+    uSeed: { value: params.uSeed },
+    uCoverage: { value: params.uCoverage },
+    uDensity: { value: params.uDensity },
+    uSoftness: { value: params.uSoftness },
+    uContrast: { value: params.uContrast },
+    uBaseScale: { value: params.uBaseScale },
+    uOctaves: { value: params.uOctaves },
+    uOpacity: { value: params.uOpacity },
+    uLightFocus: { value: params.uLightFocus },
+    uLightLining: { value: params.uLightLining },
+    uLightIntensity: { value: params.uLightIntensity },
+    uNebulaStrength: { value: params.uNebulaStrength },
+    uNebulaExposure: { value: params.uNebulaExposure },
+    uCloudShadow: { value: vectorFromArray(params.uCloudShadow) },
+    uCloudHighlight: { value: vectorFromArray(params.uCloudHighlight) },
+    uCloudCore: { value: vectorFromArray(params.uCloudCore) },
+  };
+
+  applyFieldGradientToUniforms(uniforms, gradient);
+  return uniforms;
+}
 
 export function createStarfield({ renderer, scene, requestRender }) {
   const targetManager = createRenderTargetManager({ renderer });
@@ -92,6 +164,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     cameraInfo: currentCameraInfo,
     maxTextureSize,
     accumulationType,
+    residentLayerCount: 2,
   });
   const initialBakeWidth = defaultPatchLayout.virtualWidth;
   const defaultStarParams = {
@@ -106,6 +179,12 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uGlareVar: 0.95,
     uColorVar: 1,
     uSeed: 1,
+  };
+  const defaultBackgroundParams = {
+    ...DEFAULT_LIGHT_COMPOSITION_BACKGROUND,
+    uCloudShadow: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudShadow],
+    uCloudHighlight: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudHighlight],
+    uCloudCore: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudCore],
   };
   const defaults = {
     ...defaultStarParams,
@@ -122,6 +201,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uEffectMaxSize: DEFAULT_EFFECT_MAX_SIZE,
     uWinkleSharpness: DEFAULT_WINKLE_SHARPNESS,
     uWinkleFlashiness: DEFAULT_WINKLE_FLASHINESS,
+    backgroundParams: defaultBackgroundParams,
     ...DEFAULT_ADAPTIVE_QUALITY,
   };
 
@@ -130,6 +210,12 @@ export function createStarfield({ renderer, scene, requestRender }) {
     skyBackground: {
       enabled: defaults.skyBackgroundEnabled,
       radius: defaults.skyBackgroundRadius,
+      params: {
+        ...defaultBackgroundParams,
+        uCloudShadow: [...defaultBackgroundParams.uCloudShadow],
+        uCloudHighlight: [...defaultBackgroundParams.uCloudHighlight],
+        uCloudCore: [...defaultBackgroundParams.uCloudCore],
+      },
     },
     bakedStars: {
       enabled: defaults.bakedStarsEnabled,
@@ -162,6 +248,20 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   const fallbackPatchTexture = targetManager.createFallbackPatchTexture();
   const fallbackPatchTarget = { texture: fallbackPatchTexture };
+  const fallbackBackgroundTexture = new THREE.DataTexture(
+    new Uint8Array([8, 16, 44, 255]),
+    1,
+    1,
+    THREE.RGBAFormat,
+  );
+  fallbackBackgroundTexture.name = "Fallback baked nebula patch";
+  fallbackBackgroundTexture.colorSpace = THREE.SRGBColorSpace;
+  fallbackBackgroundTexture.minFilter = THREE.LinearFilter;
+  fallbackBackgroundTexture.magFilter = THREE.LinearFilter;
+  fallbackBackgroundTexture.wrapS = THREE.ClampToEdgeWrapping;
+  fallbackBackgroundTexture.wrapT = THREE.ClampToEdgeWrapping;
+  fallbackBackgroundTexture.needsUpdate = true;
+  const fallbackBackgroundTarget = { texture: fallbackBackgroundTexture };
   const screenPixelAngleUniform = { value: Math.PI / REFERENCE_BAKE_HEIGHT };
   const referenceHeightUniform = { value: REFERENCE_BAKE_HEIGHT };
 
@@ -207,8 +307,16 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness },
     uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness },
   };
+  const backgroundUniforms = createLightCompositionUniforms(layerState.skyBackground.params, DEFAULT_FIELD_GRADIENT);
+  layerState.skyBackground.uniforms = backgroundUniforms;
   layerState.bakedStars.uniforms = bakeUniforms;
   layerState.brightOverlay.uniforms = overlayUniforms;
+
+  const backgroundBakeMaterial = createLightCompositionBakeMaterial(backgroundUniforms);
+  const backgroundBakeScene = new THREE.Scene();
+  const backgroundBakeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), backgroundBakeMaterial);
+  backgroundBakeQuad.frustumCulled = false;
+  backgroundBakeScene.add(backgroundBakeQuad);
 
   const starMaterial = createStarMaterial(bakeUniforms);
   let starGeometry = createEmptyStarGeometry();
@@ -220,9 +328,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     scene,
     overlayUniforms,
     requestRender,
-    backgroundRadius: layerState.skyBackground.radius,
     overlayRadius: layerState.brightOverlay.radius,
-    sphereSegments: currentSphereSegments,
   });
   starLayers.setEnabled(brightStarOverlayEnabled);
 
@@ -243,7 +349,25 @@ export function createStarfield({ renderer, scene, requestRender }) {
   let currentPatchLayout = defaultPatchLayout;
   let currentSupersample = currentPatchLayout.supersample;
   let patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
+  let backgroundPatchDescriptors = createBackgroundPatchDescriptors(currentPatchLayout);
   let supersampleTarget = targetManager.createAccumulationTarget(1, 1);
+
+  const backgroundSkydome = createSkydomeManager({
+    scene,
+    requestRender,
+    targetManager,
+    fallbackPatchTarget: fallbackBackgroundTarget,
+    getSphereSegments: () => currentSphereSegments,
+    initialRadius: layerState.skyBackground.radius,
+    createMaterial: createBackgroundPatchDomeMaterial,
+    renderOrder: -10,
+    onBlendStatsChange: () => {
+      backgroundPipeline?.syncStats();
+      syncOverlayStats();
+    },
+  });
+  backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
+  backgroundSkydome.setVisible(layerState.skyBackground.enabled);
 
   const skydome = createSkydomeManager({
     scene,
@@ -255,6 +379,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     onBlendStatsChange: () => pipeline?.syncBakeQueueStats(),
   });
   skydome.rebuildBakedDomeMeshes(patchDescriptors);
+  let backgroundPipeline;
   pipeline = createBakePipeline({
     renderer,
     starScene,
@@ -301,6 +426,28 @@ export function createStarfield({ renderer, scene, requestRender }) {
     },
     requestRender,
   });
+  backgroundPipeline = createBackgroundBakePipeline({
+    renderer,
+    bakeCamera,
+    backgroundScene: backgroundBakeScene,
+    backgroundUniforms,
+    skydome: backgroundSkydome,
+    stats,
+    getPatchDescriptors: () => backgroundPatchDescriptors,
+    targetForDescriptor: backgroundTargetForDescriptor,
+    targetMatchesDescriptor,
+    releaseTarget: (target) => targetManager.releaseTarget(target),
+    descriptorById: backgroundDescriptorById,
+    targetBytes: (target) => targetManager.patchTargetBytes(target),
+    notifyReadouts,
+    requestRender,
+    onBakeQueueDrained: () => {
+      backgroundPipeline.syncStats();
+      targetManager.disposeTargetPool();
+      syncOverlayStats();
+      notifyReadouts();
+    },
+  });
 
   function accumulationBytesPerPixel() {
     return accumulationType === THREE.HalfFloatType ? 8 : 4;
@@ -335,10 +482,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
       stats,
       targetManager,
       allocationBudgetBytes: STARFIELD_ALLOCATION_BUDGET_BYTES,
+      residentLayerCount: 2,
       bakeScratchBytes: currentBakeScratchBytes(),
       queueState: pipeline.queueState(),
       activeSparseMode,
-      activeBlendCount: skydome.activeBlendCount,
+      activeBlendCount: skydome.activeBlendCount + backgroundSkydome.activeBlendCount,
       setCameraInfo,
       syncOverlayStats,
     };
@@ -400,6 +548,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
       cameraInfo: currentCameraInfo,
       maxTextureSize,
       accumulationType,
+      residentLayerCount: 2,
     });
   }
 
@@ -464,6 +613,17 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return target;
   }
 
+  function backgroundTargetForDescriptor(descriptor, name = "Baked nebula patch") {
+    applyDescriptorBakeStorage(descriptor);
+    const target = targetManager.acquireTarget(descriptor.storageSize.width, descriptor.storageSize.height, {
+      name,
+      wrapS: descriptor.wrapS,
+      wrapT: descriptor.wrapT,
+    });
+    attachTargetSamplingMetadata(descriptor, target);
+    return target;
+  }
+
   function targetMatchesDescriptor(descriptor, target) {
     if (!target) return false;
     const storageSize = plannedDescriptorStorageSize(descriptor);
@@ -495,12 +655,54 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return descriptors;
   }
 
+  function createBackgroundPatchDescriptors(layout) {
+    const descriptors = createPatchDescriptorList(layout, maxTextureSize);
+    descriptors.forEach((descriptor) => {
+      descriptor.backgroundDirty = true;
+      descriptor.backgroundDirtyReason = "new";
+      descriptor.fallbackState = FALLBACK_STATES.EMPTY;
+      descriptor.allocationState = ALLOCATION_STATES.UNALLOCATED;
+    });
+    return descriptors;
+  }
+
   function descriptorById(patchId) {
     return patchDescriptors.find((descriptor) => descriptor.id === patchId) ?? null;
   }
 
+  function backgroundDescriptorById(patchId) {
+    return backgroundPatchDescriptors.find((descriptor) => descriptor.id === patchId) ?? null;
+  }
+
+  function descriptorMeshTriangles(descriptor) {
+    const geometry = descriptor.mesh?.geometry;
+    if (!geometry) return 0;
+    if (geometry.index) return Math.round(geometry.index.count / 3);
+    return Math.round((geometry.attributes.position?.count ?? 0) / 3);
+  }
+
+  function syncBackgroundStats() {
+    backgroundPipeline?.syncStats();
+    const visible = layerState.skyBackground.enabled;
+    stats.backgroundLayerEnabled = visible;
+    stats.backgroundLayerDrawCalls = visible ? backgroundPatchDescriptors.length : 0;
+    stats.backgroundLayerTriangles = visible
+      ? backgroundPatchDescriptors.reduce((total, descriptor) => total + descriptorMeshTriangles(descriptor), 0)
+      : 0;
+    stats.backgroundLayerRadius = layerState.skyBackground.radius;
+    stats.backgroundSeed = backgroundUniforms.uSeed.value;
+    stats.backgroundCoverage = backgroundUniforms.uCoverage.value;
+    stats.backgroundDensity = backgroundUniforms.uDensity.value;
+    stats.backgroundScale = backgroundUniforms.uBaseScale.value;
+    stats.backgroundOpacity = backgroundUniforms.uOpacity.value;
+    stats.backgroundNebulaStrength = backgroundUniforms.uNebulaStrength.value;
+    stats.backgroundNebulaExposure = backgroundUniforms.uNebulaExposure.value;
+    stats.backgroundLightIntensity = backgroundUniforms.uLightIntensity.value;
+  }
+
   function syncOverlayStats() {
     Object.assign(stats, starLayers.collectStats());
+    syncBackgroundStats();
     stats.bakedStarLayerEnabled = layerState.bakedStars.enabled;
     stats.bakedStarLayerDrawCalls = layerState.bakedStars.enabled ? patchDescriptors.length : 0;
     stats.bakedStarLayerRadius = layerState.bakedStars.radius;
@@ -805,13 +1007,18 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function scheduleScreenLayerRebakes() {
     const descriptors = descriptorsNeedingScreenLayerBake();
-    if (descriptors.length === 0) return;
-    pipeline.scheduleLayerBakeJobs(descriptors, "screen");
+    if (descriptors.length > 0) {
+      pipeline.scheduleLayerBakeJobs(descriptors, "screen");
+    }
+    backgroundPipeline.markPatchDescriptorsStale("screen");
+    backgroundPipeline.scheduleBake(CAMERA_BAKE_IDLE_MS);
   }
 
   function rebuildDisplayGeometry() {
+    backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
     skydome.rebuildBakedDomeMeshes(patchDescriptors);
     starLayers.setSphereSegments(currentSphereSegments);
+    syncOverlayStats();
     updateSphereSegmentStats(stats, currentSphereSegments);
     requestRender();
   }
@@ -837,21 +1044,30 @@ export function createStarfield({ renderer, scene, requestRender }) {
     }
 
     const previousDescriptors = patchDescriptors;
+    const previousBackgroundDescriptors = backgroundPatchDescriptors;
     pipeline.clearBakeQueue();
+    backgroundPipeline.clearBakeQueue();
     currentPatchLayout = nextLayout;
     currentBakeWidth = nextLayout.virtualWidth;
     patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
+    backgroundPatchDescriptors = createBackgroundPatchDescriptors(currentPatchLayout);
     currentSupersample = currentPatchLayout.supersample ?? 1;
     pendingDisplaySwap = null;
     skydome.disposeBakedDomeMeshes();
+    backgroundSkydome.disposeBakedDomeMeshes();
     disposePatchDescriptors(previousDescriptors, { releaseTargets: false });
+    disposePatchDescriptors(previousBackgroundDescriptors, { releaseTargets: false, skydomeManager: backgroundSkydome });
     skydome.rebuildBakedDomeMeshes(patchDescriptors);
+    backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
+    backgroundSkydome.setVisible(layerState.skyBackground.enabled);
     stats.autoLayoutReason = nextLayout.autoLayoutReason ?? reason;
     stats.pendingAutoLayout = false;
     updatePatchStats();
+    syncOverlayStats();
     notifyReadouts();
     if (bake) {
       pipeline.bakeNow();
+      backgroundPipeline.bakeNow();
     }
     return true;
   }
@@ -878,7 +1094,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return true;
   }
 
-  function disposePatchDescriptors(descriptors, { releaseTargets = true } = {}) {
+  function disposePatchDescriptors(descriptors, { releaseTargets = true, skydomeManager = skydome } = {}) {
     descriptors.forEach((descriptor) => {
       descriptor.state = PATCH_STATES.EVICTING;
       const targets = new Set([
@@ -901,7 +1117,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
       descriptor.nextTarget = null;
       descriptor.fallbackState = FALLBACK_STATES.EMPTY;
       descriptor.allocationState = ALLOCATION_STATES.UNALLOCATED;
-      skydome.clearBlendForDescriptor(descriptor);
+      skydomeManager.clearBlendForDescriptor(descriptor);
     });
   }
 
@@ -924,6 +1140,15 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function setLayerParam(layerId, key, value, delay = 180) {
     const nextValue = Number(value);
     if (!Number.isFinite(nextValue) || !setLayerParamValue(layerId, key, nextValue)) return;
+
+    if (layerId === "skyBackground") {
+      backgroundPipeline.markPatchDescriptorsStale("background");
+      backgroundPipeline.scheduleBake(delay);
+      syncOverlayStats();
+      notifyReadouts();
+      requestRender();
+      return;
+    }
 
     if (layerId === "bakedStars") {
       if (CATALOG_PARAMS.has(key)) {
@@ -992,7 +1217,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
     if (layerId === "skyBackground") {
       layerState.skyBackground.enabled = nextEnabled;
-      starLayers.setLayerEnabled("skyBackground", nextEnabled);
+      backgroundSkydome.setVisible(nextEnabled);
     } else if (layerId === "bakedStars") {
       layerState.bakedStars.enabled = nextEnabled;
       skydome.setVisible(nextEnabled);
@@ -1019,7 +1244,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     layerState[layerId].radius = nextRadius;
 
     if (layerId === "skyBackground") {
-      starLayers.setLayerRadius("skyBackground", nextRadius);
+      backgroundSkydome.setRadius(nextRadius, backgroundPatchDescriptors);
     } else if (layerId === "bakedStars") {
       skydome.setRadius(nextRadius, patchDescriptors);
     } else if (layerId === "brightOverlay") {
@@ -1123,9 +1348,22 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function recordRender() {
     stats.renders += 1;
     starLayers.advanceRuntime();
+    if (backgroundSkydome.activeBlendCount > 0 && backgroundSkydome.advancePatchBlends()) {
+      requestRender();
+    }
     if (skydome.activeBlendCount > 0 && skydome.advancePatchBlends()) {
       requestRender();
     }
+  }
+
+  function bakeNow() {
+    pipeline.bakeNow();
+    backgroundPipeline.bakeNow();
+  }
+
+  function scheduleBake(delay = 180) {
+    pipeline.scheduleBake(delay);
+    backgroundPipeline.scheduleBake(delay);
   }
 
   function collectStats(rendererInfo, cameraInfo = {}, options = {}) {
@@ -1135,18 +1373,25 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function dispose() {
     clearTimeout(autoLayoutTimer);
     pipeline.clearBakeQueue();
+    backgroundPipeline.clearBakeQueue();
     if (pendingDisplaySwap) {
       disposePatchDescriptors(pendingDisplaySwap.previousDescriptors, { releaseTargets: false });
       pendingDisplaySwap = null;
     }
     disposePatchDescriptors(patchDescriptors, { releaseTargets: false });
+    disposePatchDescriptors(backgroundPatchDescriptors, { releaseTargets: false, skydomeManager: backgroundSkydome });
     targetManager.disposeTargetPool();
+    backgroundPipeline.dispose();
+    backgroundSkydome.dispose();
     skydome.dispose();
     supersampleTarget.dispose();
     starGeometry.dispose();
     starMaterial.dispose();
     starLayers.dispose();
     fallbackPatchTexture.dispose();
+    fallbackBackgroundTexture.dispose();
+    backgroundBakeQuad.geometry.dispose();
+    backgroundBakeMaterial.dispose();
     downsampleQuad.geometry.dispose();
     downsampleMaterial.dispose();
   }
@@ -1159,6 +1404,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     readoutsChangeHandler = handler;
   }
 
+  syncOverlayStats();
   updatePatchStats();
 
   return {
@@ -1179,8 +1425,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
     getBrightStarOverlayEnabled,
     setBakeWidth,
     reseed,
-    bakeNow: pipeline.bakeNow,
-    scheduleBake: pipeline.scheduleBake,
+    bakeNow,
+    scheduleBake,
     collectStats,
     dispose,
     setBakeStatusHandler,

@@ -88,6 +88,14 @@ export function createInitialStats({
     backgroundLayerDrawCalls: 1,
     backgroundLayerTriangles: 0,
     backgroundLayerRadius: defaults.skyBackgroundRadius,
+    backgroundSeed: defaults.backgroundParams?.uSeed ?? 0,
+    backgroundCoverage: defaults.backgroundParams?.uCoverage ?? 0,
+    backgroundDensity: defaults.backgroundParams?.uDensity ?? 0,
+    backgroundScale: defaults.backgroundParams?.uBaseScale ?? 0,
+    backgroundOpacity: defaults.backgroundParams?.uOpacity ?? 0,
+    backgroundNebulaStrength: defaults.backgroundParams?.uNebulaStrength ?? 0,
+    backgroundNebulaExposure: defaults.backgroundParams?.uNebulaExposure ?? 0,
+    backgroundLightIntensity: defaults.backgroundParams?.uLightIntensity ?? 0,
     bakedStarLayerEnabled: true,
     bakedStarLayerDrawCalls: defaultPatchLayout.patchCount,
     bakedStarLayerRadius: defaults.bakedStarsRadius,
@@ -259,6 +267,7 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
     targetManager,
     allocationBudgetBytes,
     bakeScratchBytes,
+    residentLayerCount = 1,
   } = ctx;
   const patchCount = Math.max(1, patchDescriptors.length);
   const residentTextureBytes = targetManager.activePatchTargetBytes();
@@ -278,7 +287,7 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
     recommendedStorageWidth,
     recommendedStorageHeight,
     FINAL_TEXTURE_BYTES_PER_PIXEL,
-  ) * patchCount;
+  ) * patchCount * residentLayerCount;
   const patchBudgetBytes = allocationBudgetBytes ?? Math.max(BYTES_PER_MIB, adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
 
   return {

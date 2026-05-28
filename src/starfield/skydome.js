@@ -17,6 +17,8 @@ export function createSkydomeManager({
   fallbackPatchTarget,
   getSphereSegments,
   initialRadius = DOME_RADIUS,
+  createMaterial = createPatchDomeMaterial,
+  renderOrder = 0,
   onBlendStatsChange = () => {},
 }) {
   const bakedDomeGroup = new THREE.Group();
@@ -58,12 +60,13 @@ export function createSkydomeManager({
 
   function createPatchDomeMesh(descriptor) {
     const geometry = createDomeGeometry(descriptor);
-    const material = createPatchDomeMaterial({
+    const material = createMaterial({
       descriptor,
       visibleTarget: visibleTargetForDescriptor(descriptor),
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.frustumCulled = false;
+    mesh.renderOrder = renderOrder;
     mesh.userData.patchDescriptorId = descriptor.id;
     descriptor.mesh = mesh;
     descriptor.material = material;

@@ -123,8 +123,9 @@ function candidateMemory({
   patchCount,
   supersample,
   accumulationBytes,
+  residentLayerCount = 1,
 }) {
-  const residentBytes = estimateTextureBytes(storageWidth, storageHeight, FINAL_TEXTURE_BYTES_PER_PIXEL) * patchCount;
+  const residentBytes = estimateTextureBytes(storageWidth, storageHeight, FINAL_TEXTURE_BYTES_PER_PIXEL) * patchCount * residentLayerCount;
   const scratchBytes = estimateTextureBytes(
     storageWidth * supersample,
     storageHeight * supersample,
@@ -144,6 +145,7 @@ function chooseSupersample({
   budgetBytes,
   maxTextureSize,
   accumulationBytes,
+  residentLayerCount = 1,
 }) {
   const maxSupersample = Math.max(1, Math.min(
     MAX_AUTO_SUPERSAMPLE,
@@ -158,6 +160,7 @@ function chooseSupersample({
       patchCount,
       supersample,
       accumulationBytes,
+      residentLayerCount,
     });
     if (memory.peakBytes <= budgetBytes || supersample === 1) {
       return {
@@ -176,6 +179,7 @@ function chooseSupersample({
       patchCount,
       supersample: 1,
       accumulationBytes,
+      residentLayerCount,
     }),
     peakBudgetRatio: 1,
   };
@@ -188,6 +192,7 @@ function buildMemoryBoundCandidate({
   maxTextureSize,
   budgetBytes,
   accumulationBytes,
+  residentLayerCount = 1,
 }) {
   const guard = grid === 1 ? 0 : PATCH_GUARD_TEXELS;
   const maxContentWidth = Math.max(1, maxTextureSize - guard * 2);
@@ -215,6 +220,7 @@ function buildMemoryBoundCandidate({
       budgetBytes,
       maxTextureSize,
       accumulationBytes,
+      residentLayerCount,
     });
     result = {
       contentWidth,
@@ -246,6 +252,7 @@ export function createAutoPatchLayout({
   cameraInfo,
   maxTextureSize,
   accumulationType = THREE.UnsignedByteType,
+  residentLayerCount = 1,
 }) {
   const screenWidth = Math.max(1, Number(cameraInfo.screenWidth) || 1);
   const screenHeight = Math.max(1, Number(cameraInfo.screenHeight) || 1);
@@ -268,6 +275,7 @@ export function createAutoPatchLayout({
     maxTextureSize,
     budgetBytes,
     accumulationBytes,
+    residentLayerCount,
   });
   const budgetExceeded = candidate.allocation.peakBytes > budgetBytes;
 
