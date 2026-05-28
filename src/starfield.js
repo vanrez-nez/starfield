@@ -4,7 +4,6 @@ import {
   BRIGHT_STAR_OVERLAY_ENABLED,
   BRIGHT_STAR_OVERLAY_RADIUS_SCALE,
   BRIGHT_STAR_OVERLAY_STRENGTH,
-  BYTES_PER_MIB,
   CATALOG_PARAMS,
   DEFAULT_ADAPTIVE_QUALITY,
   DOME_RADIUS,
@@ -13,21 +12,19 @@ import {
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
   SPARSE_PATCH_MODES,
+  STARFIELD_ALLOCATION_BUDGET_BYTES,
   STAR_QUERY_SEAM_COPIES,
-  clamp,
   estimateTextureBytes,
   formatBytes,
   screenPixelAngleFromInfo,
   sizeLabel,
 } from "./starfield/constants.js";
 import {
-  autoSupersampleForLayout,
+  assignDescriptorStorage,
+  createAutoPatchLayout,
   createPatchDescriptors as createPatchDescriptorList,
-  createPatchLayout,
-  defaultBakeWidth,
   maxDescriptorPrecisionSize,
   patchGridLabel,
-  supportedBakeWidths,
 } from "./starfield/patch-layout.js";
 import {
   createCatalogOverlayAndStats,
@@ -68,9 +65,29 @@ export function createStarfield({ renderer, scene, requestRender }) {
   let readoutsChangeHandler = () => {};
   let brightStarOverlayEnabled = BRIGHT_STAR_OVERLAY_ENABLED;
   let catalogDirty = true;
+  let autoLayoutTimer = 0;
+  let pendingAutoLayoutKey = "";
+  let pendingDisplaySwap = null;
+  let layoutInitialized = false;
+  let currentCameraInfo = {
+    horizontalFov: 60,
+    verticalFov: 60,
+    screenWidth: 1,
+    screenHeight: 1,
+    cssWidth: 1,
+    cssHeight: 1,
+    pixelRatio: 1,
+    forwardX: 0,
+    forwardY: 0,
+    forwardZ: -1,
+  };
 
-  const initialBakeWidth = defaultBakeWidth(maxTextureSize);
-  const defaultPatchLayout = createPatchLayout(initialBakeWidth, maxTextureSize);
+  const defaultPatchLayout = createAutoPatchLayout({
+    cameraInfo: currentCameraInfo,
+    maxTextureSize,
+    accumulationType,
+  });
+  const initialBakeWidth = defaultPatchLayout.virtualWidth;
   const defaults = {
     uDensity: 104,
     uSparsity: 0.79,
@@ -89,11 +106,11 @@ export function createStarfield({ renderer, scene, requestRender }) {
   };
 
   let currentSphereSegments = defaults.sphereSegments;
-  const adaptiveQuality = { ...DEFAULT_ADAPTIVE_QUALITY };
+  const adaptiveQuality = { ...DEFAULT_ADAPTIVE_QUALITY, adaptiveResolution: true };
   const stats = createInitialStats({
     defaults,
     defaultPatchLayout,
-    supersample: autoSupersampleForLayout(defaultPatchLayout, maxTextureSize),
+    supersample: defaultPatchLayout.supersample,
     maxTextureSize,
     accumulationTypeLabel,
     currentSphereSegments,
@@ -105,10 +122,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   const bakeUniforms = {
     uBakeSize: { value: new THREE.Vector2(
-      defaultPatchLayout.storageWidth * autoSupersampleForLayout(defaultPatchLayout, maxTextureSize),
-      defaultPatchLayout.storageHeight * autoSupersampleForLayout(defaultPatchLayout, maxTextureSize),
+      defaultPatchLayout.storageWidth * defaultPatchLayout.supersample,
+      defaultPatchLayout.storageHeight * defaultPatchLayout.supersample,
     ) },
-    uOutputSize: { value: new THREE.Vector2(defaults.bakeWidth, defaults.bakeWidth / 2) },
+    uOutputSize: { value: new THREE.Vector2(defaultPatchLayout.storageWidth, defaultPatchLayout.storageHeight) },
     uTileUvMin: { value: new THREE.Vector2(0, 0) },
     uTileUvSize: { value: new THREE.Vector2(1, 1) },
     uScreenPixelAngle: { value: Math.PI / REFERENCE_BAKE_HEIGHT },
@@ -124,7 +141,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     uGlareVar: { value: defaults.uGlareVar },
     uColorVar: { value: defaults.uColorVar },
     uSeed: { value: defaults.uSeed },
-    uOverlayEnabled: { value: BRIGHT_STAR_OVERLAY_ENABLED ? 1 : 0 },
+    uOverlayEnabled: { value: brightStarOverlayEnabled ? 1 : 0 },
   };
 
   const starMaterial = createStarMaterial(bakeUniforms);
@@ -169,25 +186,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
   downsampleScene.add(downsampleQuad);
 
   let currentBakeWidth = defaults.bakeWidth;
-  let currentPatchLayout = createPatchLayout(currentBakeWidth, maxTextureSize);
-  let currentSupersample = autoSupersampleForLayout(currentPatchLayout, maxTextureSize);
+  let currentPatchLayout = defaultPatchLayout;
+  let currentSupersample = currentPatchLayout.supersample;
   let patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
-  let supersampleTarget = targetManager.createAccumulationTarget(
-    maxDescriptorPrecisionSize(patchDescriptors, currentSupersample).width,
-    maxDescriptorPrecisionSize(patchDescriptors, currentSupersample).height,
-  );
-  let currentCameraInfo = {
-    horizontalFov: 0,
-    verticalFov: 0,
-    screenWidth: 1,
-    screenHeight: 1,
-    cssWidth: 1,
-    cssHeight: 1,
-    pixelRatio: 1,
-    forwardX: 0,
-    forwardY: 0,
-    forwardZ: -1,
-  };
+  let supersampleTarget = targetManager.createAccumulationTarget(1, 1);
 
   const skydome = createSkydomeManager({
     scene,
@@ -218,6 +220,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
     getPatchDescriptors: () => patchDescriptors,
     getSupersampleTarget: () => supersampleTarget,
     targetForDescriptor,
+    targetMatchesDescriptor,
+    releaseTarget: (target) => targetManager.releaseTarget(target),
     descriptorById,
     setStarBakeGeometry,
     createBakeGeometry: (descriptor) => createStarGeometryForDescriptor({
@@ -232,8 +236,30 @@ export function createStarfield({ renderer, scene, requestRender }) {
     updateDemandStats,
     notifyReadouts,
     setBakeStatus,
+    onDescriptorBaked: recordDescriptorLayerBake,
+    onBakeQueueDrained: () => {
+      completePendingDisplaySwap();
+      releaseBakeScratch();
+      targetManager.disposeTargetPool();
+      updatePatchStats();
+      notifyReadouts();
+    },
     requestRender,
   });
+
+  function accumulationBytesPerPixel() {
+    return accumulationType === THREE.HalfFloatType ? 8 : 4;
+  }
+
+  function currentBakeScratchBytes() {
+    if (!supersampleTarget || supersampleTarget.width <= 1 || supersampleTarget.height <= 1) return 0;
+    return estimateTextureBytes(supersampleTarget.width, supersampleTarget.height, accumulationBytesPerPixel());
+  }
+
+  function releaseBakeScratch() {
+    if (!supersampleTarget || (supersampleTarget.width <= 1 && supersampleTarget.height <= 1)) return;
+    supersampleTarget.setSize(1, 1);
+  }
 
   function makeStatsContext() {
     return {
@@ -250,6 +276,8 @@ export function createStarfield({ renderer, scene, requestRender }) {
       catalogDirty,
       stats,
       targetManager,
+      allocationBudgetBytes: STARFIELD_ALLOCATION_BUDGET_BYTES,
+      bakeScratchBytes: currentBakeScratchBytes(),
       queueState: pipeline.queueState(),
       activeSparseMode,
       activeBlendCount: skydome.activeBlendCount,
@@ -267,15 +295,135 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function supportedWidths() {
-    return supportedBakeWidths(maxTextureSize);
+    return [currentBakeWidth];
+  }
+
+  function roundedNumber(value, digits = 4) {
+    const factor = 10 ** digits;
+    return Math.round((Number(value) || 0) * factor) / factor;
+  }
+
+  function screenBakeSignature(cameraInfo = currentCameraInfo) {
+    const screenWidth = Math.max(1, Math.round(Number(cameraInfo.screenWidth) || 1));
+    const screenHeight = Math.max(1, Math.round(Number(cameraInfo.screenHeight) || 1));
+    const pixelRatio = roundedNumber(cameraInfo.pixelRatio, 3);
+    const horizontalFov = roundedNumber(cameraInfo.horizontalFov, 3);
+    const verticalFov = roundedNumber(cameraInfo.verticalFov, 3);
+    const screenPixelAngle = roundedNumber(screenPixelAngleFromInfo(cameraInfo), 12);
+    const key = [
+      `${screenWidth}x${screenHeight}`,
+      `pr:${pixelRatio}`,
+      `fov:${horizontalFov}x${verticalFov}`,
+      `px:${screenPixelAngle}`,
+    ].join("|");
+
+    return {
+      key,
+      screenWidth,
+      screenHeight,
+      pixelRatio,
+      horizontalFov,
+      verticalFov,
+      screenPixelAngle,
+    };
+  }
+
+  function patchLayoutKey(layout) {
+    return [
+      `${layout.columns}x${layout.rows}`,
+      `guard:${layout.guard}`,
+      `content:${layout.contentWidth}x${layout.contentHeight}`,
+      `ss:${layout.supersample ?? 1}`,
+    ].join("|");
+  }
+
+  function computeAutoPatchLayout() {
+    return createAutoPatchLayout({
+      cameraInfo: currentCameraInfo,
+      maxTextureSize,
+      accumulationType,
+    });
+  }
+
+  function plannedDescriptorContentSize(descriptor) {
+    const sourceSize = descriptor.targetSize;
+    return {
+      width: sourceSize.width,
+      height: sourceSize.height,
+    };
+  }
+
+  function plannedDescriptorStorageSize(descriptor) {
+    const contentSize = plannedDescriptorContentSize(descriptor);
+    const assignedWidth = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.width)));
+    const assignedHeight = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.height)));
+    return {
+      width: Math.min(maxTextureSize, assignedWidth + currentPatchLayout.guard * 2),
+      height: Math.min(maxTextureSize, assignedHeight + currentPatchLayout.guard * 2),
+    };
+  }
+
+  function desiredLayerBakeKey(descriptor, signature = screenBakeSignature()) {
+    const storageSize = plannedDescriptorStorageSize(descriptor);
+    return [
+      descriptor.id,
+      signature.key,
+      `storage:${storageSize.width}x${storageSize.height}`,
+      `overlay:${brightStarOverlayEnabled ? 1 : 0}`,
+    ].join("|");
+  }
+
+  function applyDescriptorBakeStorage(descriptor) {
+    const contentSize = plannedDescriptorContentSize(descriptor);
+    assignDescriptorStorage(
+      descriptor,
+      contentSize.width,
+      contentSize.height,
+      currentPatchLayout.guard,
+      maxTextureSize,
+    );
+  }
+
+  function attachTargetSamplingMetadata(descriptor, target) {
+    target.starfieldSampling = {
+      innerOffset: descriptor.innerOffset.clone(),
+      innerScale: descriptor.innerScale.clone(),
+      storageUvMin: descriptor.storageUvMin.clone(),
+      storageUvSize: descriptor.storageUvSize.clone(),
+      assignedSize: { ...descriptor.assignedSize },
+      storageSize: { ...descriptor.storageSize },
+    };
   }
 
   function targetForDescriptor(descriptor, name = "Baked skydome patch") {
-    return targetManager.acquireTarget(descriptor.storageSize.width, descriptor.storageSize.height, {
+    applyDescriptorBakeStorage(descriptor);
+    const target = targetManager.acquireTarget(descriptor.storageSize.width, descriptor.storageSize.height, {
       name,
       wrapS: descriptor.wrapS,
       wrapT: descriptor.wrapT,
     });
+    attachTargetSamplingMetadata(descriptor, target);
+    return target;
+  }
+
+  function targetMatchesDescriptor(descriptor, target) {
+    if (!target) return false;
+    const storageSize = plannedDescriptorStorageSize(descriptor);
+    return targetManager.renderTargetWidth(target) === storageSize.width
+      && targetManager.renderTargetHeight(target) === storageSize.height;
+  }
+
+  function recordDescriptorLayerBake(descriptor) {
+    const signature = screenBakeSignature();
+    descriptor.lastBakedScreenSignature = { ...signature };
+    descriptor.lastBakedScreenSignatureKey = signature.key;
+    descriptor.lastBakedTargetSize = { ...descriptor.targetSize };
+    descriptor.lastBakedStorageSize = { ...descriptor.storageSize };
+    descriptor.lastBakedLayerKey = desiredLayerBakeKey(descriptor, signature);
+    descriptor.pendingLayerBakeKey = "";
+    descriptor.pendingScreenSignature = null;
+    descriptor.layerDirty = false;
+    descriptor.layerDirtyReason = "";
   }
 
   function createPatchDescriptorsWithTargets(layout) {
@@ -351,17 +499,28 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function activeSparseMode() {
-    return adaptiveQuality.adaptiveResolution
-      ? adaptiveQuality.sparseMode
-      : SPARSE_PATCH_MODES.FULL;
+    return SPARSE_PATCH_MODES.FULL;
   }
 
   function descriptorTextureBytes(descriptor) {
+    const storageSize = plannedDescriptorStorageSize(descriptor);
     return estimateTextureBytes(
-      descriptor.storageSize.width,
-      descriptor.storageSize.height,
+      storageSize.width,
+      storageSize.height,
       FINAL_TEXTURE_BYTES_PER_PIXEL,
     );
+  }
+
+  function autoVirtualSizeLabel() {
+    const targetWidth = patchDescriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.targetSize.width), 1);
+    const targetHeight = patchDescriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.targetSize.height), 1);
+    return sizeLabel(targetWidth * currentPatchLayout.columns, targetHeight * currentPatchLayout.rows);
+  }
+
+  function currentPatchSizeLabel() {
+    const targetWidth = patchDescriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.assignedSize?.width ?? descriptor.targetSize.width), 1);
+    const targetHeight = patchDescriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.assignedSize?.height ?? descriptor.targetSize.height), 1);
+    return sizeLabel(targetWidth, targetHeight);
   }
 
   function descriptorVisibleInCamera(descriptor) {
@@ -412,7 +571,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function sparseSelectionForCurrentPriorities() {
     const mode = activeSparseMode();
-    const patchBudgetBytes = Math.max(BYTES_PER_MIB, adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
+    const patchBudgetBytes = STARFIELD_ALLOCATION_BUDGET_BYTES;
     const sorted = [...patchDescriptors]
       .map((descriptor) => {
         descriptor.sparseVisible = descriptorVisibleInCamera(descriptor);
@@ -534,6 +693,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function updateDemandStats() {
     const demand = computeDemandReadouts();
     updatePatchDescriptorDemand(demand);
+    currentSupersample = currentPatchLayout.supersample ?? 1;
     applySparseResidency();
     Object.assign(stats, demand, computeMemoryReadouts(demand), patchDescriptorSummary());
   }
@@ -543,10 +703,102 @@ export function createStarfield({ renderer, scene, requestRender }) {
     updateDemandStats();
   }
 
+  function descriptorsNeedingScreenLayerBake() {
+    const signature = screenBakeSignature();
+    const changedDescriptors = [];
+
+    patchDescriptors.forEach((descriptor) => {
+      if (!descriptor.sparseWanted) return;
+      if (descriptor.state !== PATCH_STATES.RESIDENT && descriptor.state !== PATCH_STATES.STALE) return;
+
+      const layerKey = desiredLayerBakeKey(descriptor, signature);
+      if (descriptor.lastBakedLayerKey === layerKey || descriptor.pendingLayerBakeKey === layerKey) return;
+
+      descriptor.pendingLayerBakeKey = layerKey;
+      descriptor.pendingScreenSignature = { ...signature };
+      descriptor.layerDirty = true;
+      descriptor.layerDirtyReason = "screen";
+      if (descriptor.state === PATCH_STATES.RESIDENT) {
+        descriptor.state = PATCH_STATES.STALE;
+      }
+      changedDescriptors.push(descriptor);
+    });
+
+    return changedDescriptors;
+  }
+
+  function scheduleScreenLayerRebakes() {
+    const descriptors = descriptorsNeedingScreenLayerBake();
+    if (descriptors.length === 0) return;
+    pipeline.scheduleLayerBakeJobs(descriptors, "screen");
+  }
+
   function rebuildDisplayGeometry() {
     skydome.rebuildBakedDomeMeshes(patchDescriptors);
     updateSphereSegmentStats(stats, currentSphereSegments);
     requestRender();
+  }
+
+  function completePendingDisplaySwap() {
+    if (!pendingDisplaySwap) return;
+
+    const { previousDescriptors } = pendingDisplaySwap;
+    skydome.disposeBakedDomeMeshes();
+    disposePatchDescriptors(previousDescriptors);
+    skydome.rebuildBakedDomeMeshes(patchDescriptors);
+    pendingDisplaySwap = null;
+    updatePatchStats();
+    notifyReadouts();
+    requestRender();
+  }
+
+  function applyAutomaticPatchLayout(reason = "automatic", { bake = true } = {}) {
+    const nextLayout = computeAutoPatchLayout();
+    if (!nextLayout || patchLayoutKey(nextLayout) === patchLayoutKey(currentPatchLayout)) {
+      stats.autoLayoutReason = nextLayout?.autoLayoutReason ?? reason;
+      return false;
+    }
+
+    const previousDescriptors = patchDescriptors;
+    pipeline.clearBakeQueue();
+    currentPatchLayout = nextLayout;
+    currentBakeWidth = nextLayout.virtualWidth;
+    patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
+    currentSupersample = currentPatchLayout.supersample ?? 1;
+    pendingDisplaySwap = null;
+    skydome.disposeBakedDomeMeshes();
+    disposePatchDescriptors(previousDescriptors, { releaseTargets: false });
+    skydome.rebuildBakedDomeMeshes(patchDescriptors);
+    stats.autoLayoutReason = nextLayout.autoLayoutReason ?? reason;
+    stats.pendingAutoLayout = false;
+    updatePatchStats();
+    notifyReadouts();
+    if (bake) {
+      pipeline.bakeNow();
+    }
+    return true;
+  }
+
+  function scheduleAutomaticPatchLayout(reason = "screen", delay = 450) {
+    const nextLayout = computeAutoPatchLayout();
+    if (!nextLayout) return false;
+
+    const nextKey = patchLayoutKey(nextLayout);
+    if (nextKey === patchLayoutKey(currentPatchLayout)) {
+      stats.autoLayoutReason = nextLayout.autoLayoutReason ?? reason;
+      return false;
+    }
+    if (pendingAutoLayoutKey === nextKey) return true;
+
+    pendingAutoLayoutKey = nextKey;
+    stats.pendingAutoLayout = true;
+    clearTimeout(autoLayoutTimer);
+    autoLayoutTimer = window.setTimeout(() => {
+      autoLayoutTimer = 0;
+      pendingAutoLayoutKey = "";
+      applyAutomaticPatchLayout(reason);
+    }, Math.max(0, delay));
+    return true;
   }
 
   function disposePatchDescriptors(descriptors, { releaseTargets = true } = {}) {
@@ -577,27 +829,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function setBakeWidth(width) {
-    if (width === currentBakeWidth) return;
-
-    const nextLayout = createPatchLayout(width, maxTextureSize);
-    if (!nextLayout) return;
-
-    const previousDescriptors = patchDescriptors;
-    pipeline.clearBakeQueue();
-    currentBakeWidth = width;
-    currentPatchLayout = nextLayout;
-    currentSupersample = autoSupersampleForLayout(currentPatchLayout, maxTextureSize);
-    skydome.disposeBakedDomeMeshes();
-    disposePatchDescriptors(previousDescriptors);
-    patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
-    targetManager.trimTargetPoolToBudget(adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
-    const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
-    pipeline.ensureSupersampleTargetSize(precisionSize.width, precisionSize.height);
-    skydome.rebuildBakedDomeMeshes(patchDescriptors);
-    updatePatchStats();
-    notifyReadouts();
-    requestRender();
-    pipeline.scheduleBake(0);
+    scheduleAutomaticPatchLayout("compat", 0);
   }
 
   function setParam(key, value, delay = 180) {
@@ -606,7 +838,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
     if (CATALOG_PARAMS.has(key)) {
       markCatalogDirty();
     }
-    pipeline.markPatchDescriptorsStale();
+    pipeline.markPatchDescriptorsStale(CATALOG_PARAMS.has(key) ? "catalog" : "visual");
     updateDemandStats();
     notifyReadouts();
     pipeline.scheduleBake(delay);
@@ -614,35 +846,6 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function setAdaptiveParam(key, value) {
     if (!(key in adaptiveQuality)) return;
-    const wasAdaptive = adaptiveQuality.adaptiveResolution;
-
-    if (key === "adaptiveResolution") {
-      adaptiveQuality[key] = Boolean(value);
-    } else if (key === "targetTexelsPerPixel") {
-      adaptiveQuality[key] = clamp(Number(value), 0.25, 4);
-    } else if (key === "minPatchSize") {
-      adaptiveQuality[key] = clamp(Number(value), 128, maxTextureSize);
-    } else if (key === "maxPatchSize") {
-      adaptiveQuality[key] = clamp(Number(value), 128, maxTextureSize);
-    } else if (key === "patchBudgetMb") {
-      adaptiveQuality[key] = clamp(Number(value), 16, 4096);
-    } else if (key === "centerBias") {
-      adaptiveQuality[key] = clamp(Number(value), 0, 1);
-    } else if (key === "sparseMode") {
-      adaptiveQuality[key] = Object.values(SPARSE_PATCH_MODES).includes(value)
-        ? value
-        : SPARSE_PATCH_MODES.FULL;
-    }
-
-    if (key === "patchBudgetMb" || key === "sparseMode") {
-      targetManager.trimTargetPoolToBudget(adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
-    }
-    updateDemandStats();
-    if (adaptiveQuality.adaptiveResolution && (wasAdaptive || key === "adaptiveResolution" || key === "sparseMode")) {
-      pipeline.markCurrentCameraQueued();
-      pipeline.enqueueBakeJobs(patchDescriptors, "upgrade", { replace: true });
-      pipeline.requestBakeQueueProcessing();
-    }
     notifyReadouts();
   }
 
@@ -653,10 +856,13 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function setBrightStarOverlayEnabled(enabled) {
-    brightStarOverlayEnabled = Boolean(enabled);
+    brightStarOverlayEnabled = BRIGHT_STAR_OVERLAY_ENABLED && Boolean(enabled);
     bakeUniforms.uOverlayEnabled.value = brightStarOverlayEnabled ? 1 : 0;
-    markCatalogDirty();
-    pipeline.markPatchDescriptorsStale();
+    stats.bakedCandidateStarCount = brightStarOverlayEnabled
+      ? stats.normalStarCount
+      : stats.normalStarCount + stats.brightStarClassCount + stats.heroStarCount;
+    stats.starInstances = stats.bakedCandidateStarCount * STAR_QUERY_SEAM_COPIES;
+    pipeline.markPatchDescriptorsStale("overlay");
     syncOverlayStats();
     updateDemandStats();
     notifyReadouts();
@@ -667,7 +873,7 @@ export function createStarfield({ renderer, scene, requestRender }) {
   function reseed() {
     bakeUniforms.uSeed.value = Math.random() * 1000;
     markCatalogDirty();
-    pipeline.markPatchDescriptorsStale();
+    pipeline.markPatchDescriptorsStale("catalog");
     pipeline.scheduleBake(0);
   }
 
@@ -680,8 +886,10 @@ export function createStarfield({ renderer, scene, requestRender }) {
     return {
       bakeWidth: currentBakeWidth,
       supportedBakeWidths: supportedWidths(),
+      virtualSize: autoVirtualSizeLabel(),
+      autoLayoutReason: currentPatchLayout.autoLayoutReason ?? stats.autoLayoutReason ?? "automatic",
       patchGrid: patchGridLabel(currentPatchLayout),
-      patchSize: sizeLabel(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight),
+      patchSize: currentPatchSizeLabel(),
       supersample: `${currentSupersample}x`,
       internalPatchSize: sizeLabel(precisionSize.width, precisionSize.height),
       gpuLimit: `${maxTextureSize}`,
@@ -694,16 +902,28 @@ export function createStarfield({ renderer, scene, requestRender }) {
 
   function setCameraInfo(cameraInfo, options = {}) {
     const { notify = true } = options;
+    const previousScreenKey = screenBakeSignature().key;
     currentCameraInfo = {
       ...currentCameraInfo,
       ...cameraInfo,
     };
-    pipeline.noteCameraMotion();
+    const nextScreenKey = screenBakeSignature().key;
+    const screenChanged = nextScreenKey !== previousScreenKey;
     stats.horizontalFov = currentCameraInfo.horizontalFov;
     stats.verticalFov = currentCameraInfo.verticalFov;
     bakeUniforms.uScreenPixelAngle.value = screenPixelAngleFromInfo(currentCameraInfo);
     updateDemandStats();
-    pipeline.maybeEnqueueCameraBakeJobs();
+
+    if (!layoutInitialized) {
+      layoutInitialized = true;
+      applyAutomaticPatchLayout("initial", { bake: false });
+    } else if (screenChanged) {
+      const layoutQueued = scheduleAutomaticPatchLayout("screen", 450);
+      if (!layoutQueued) {
+        scheduleScreenLayerRebakes();
+      }
+    }
+
     if (notify) {
       notifyReadouts();
     }
@@ -721,7 +941,12 @@ export function createStarfield({ renderer, scene, requestRender }) {
   }
 
   function dispose() {
+    clearTimeout(autoLayoutTimer);
     pipeline.clearBakeQueue();
+    if (pendingDisplaySwap) {
+      disposePatchDescriptors(pendingDisplaySwap.previousDescriptors, { releaseTargets: false });
+      pendingDisplaySwap = null;
+    }
     disposePatchDescriptors(patchDescriptors, { releaseTargets: false });
     targetManager.disposeTargetPool();
     skydome.dispose();

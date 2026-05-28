@@ -11,10 +11,10 @@ const canvas = document.querySelector("#scene");
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
-  powerPreference: "low-power",
+  // powerPreference: "low-power",
 });
 
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.setClearColor(0x05060a, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -71,7 +71,7 @@ orbitControls.enableRotate = true;
 orbitControls.enablePan = false;
 orbitControls.enableZoom = false;
 orbitControls.enableDamping = true;
-orbitControls.dampingFactor = 0.06;
+orbitControls.dampingFactor = 0.01;
 orbitControls.autoRotate = false;
 orbitControls.minPolarAngle = Math.PI / 2 - 1.35;
 orbitControls.maxPolarAngle = Math.PI / 2 + 1.35;

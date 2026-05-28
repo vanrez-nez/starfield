@@ -13,7 +13,6 @@ import {
   recordStarClass,
   screenPixelAngleFromInfo,
   wrapIndex,
-  REFERENCE_BAKE_HEIGHT,
   MIN_CORE_PIXELS,
   MIN_GLARE_PIXELS,
   GAUSSIAN_CUTOFF_SIGMA,
@@ -121,14 +120,13 @@ function createGeometryFromInstanceArrays({ directions, uvs, randoms, classes })
 }
 
 function maxStarSupportAngle({ bakeUniforms, currentCameraInfo }) {
-  const referenceAngularPx = Math.PI / REFERENCE_BAKE_HEIGHT;
   const screenAngularPx = screenPixelAngleFromInfo(currentCameraInfo);
   const coreRadius = Math.max(
-    bakeUniforms.uStarSize.value * referenceAngularPx,
+    bakeUniforms.uStarSize.value * screenAngularPx,
     MIN_CORE_PIXELS * screenAngularPx,
   );
   const glareRadius = Math.max(
-    (bakeUniforms.uStarSize.value + bakeUniforms.uGlareSize.value) * referenceAngularPx,
+    (bakeUniforms.uStarSize.value + bakeUniforms.uGlareSize.value) * screenAngularPx,
     MIN_GLARE_PIXELS * screenAngularPx,
   );
   return Math.max(coreRadius * 0.45, glareRadius * 0.36, screenAngularPx) * GAUSSIAN_CUTOFF_SIGMA;
@@ -225,7 +223,7 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
 
       recordStarClass(classStats, star.classId);
 
-      if (star.classId === STAR_CLASSES.BRIGHT || star.classId === STAR_CLASSES.HERO) {
+      if (brightStarOverlayEnabled && (star.classId === STAR_CLASSES.BRIGHT || star.classId === STAR_CLASSES.HERO)) {
         overlayDirections.push(star.x, star.y, star.z);
         overlayRandoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
         overlayClasses.push(star.classId);

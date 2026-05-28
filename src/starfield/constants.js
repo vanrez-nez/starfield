@@ -5,13 +5,17 @@ export const REFERENCE_BAKE_WIDTH = 4096;
 export const REFERENCE_BAKE_HEIGHT = REFERENCE_BAKE_WIDTH / 2;
 export const MAX_AUTO_SUPERSAMPLE = 8;
 export const VIRTUAL_WIDTH_OPTIONS = [1024, 2048, 4096, 8192, 16384];
+export const STARFIELD_ALLOCATION_BUDGET_MIB = 512;
+export const BYTES_PER_MIB = 1024 * 1024;
+export const STARFIELD_ALLOCATION_BUDGET_BYTES = STARFIELD_ALLOCATION_BUDGET_MIB * BYTES_PER_MIB;
+export const PATCH_SIZE_ALIGNMENT = 128;
 export const PATCH_GUARD_TEXELS = 64;
 export const MIN_CORE_PIXELS = 1.75;
 export const MIN_GLARE_PIXELS = 3.25;
 export const SUBPIXEL_DENSITY_THRESHOLD_PX = 0.5;
 export const AA_PIN_THRESHOLD_PX = 1.5;
 export const GAUSSIAN_CUTOFF_SIGMA = 6.0;
-export const BRIGHT_STAR_OVERLAY_ENABLED = true;
+export const BRIGHT_STAR_OVERLAY_ENABLED = false;
 export const BRIGHT_STAR_OVERLAY_STRENGTH = 0.38;
 export const BRIGHT_STAR_OVERLAY_RADIUS_SCALE = 0.985;
 export const MAX_BAKE_JOBS_PER_FRAME = 1;
@@ -20,13 +24,13 @@ export const CAMERA_MOTION_EPSILON_DEG = 0.05;
 export const CAMERA_BAKE_IDLE_MS = 450;
 export const PATCH_CROSSFADE_MS = 260;
 export const CATALOG_PARAMS = new Set(["uDensity", "uSparsity"]);
-export const TEXELS_PER_PIXEL_TARGET = 1.5;
+export const TEXELS_PER_PIXEL_TARGET = 1;
 export const DENSITY_FALLBACK_STARS_PER_PIXEL = 0.25;
 export const BRIGHT_STAR_FRACTION = 0.1;
+export const AUTO_PATCH_GRIDS = [1, 2, 4, 8, 16];
 export const PATCH_SIZE_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 export const BASE_TARGET_POOL_BUCKETS = [128, 256, 512, 1024, 2048, 4096];
 export const FINAL_TEXTURE_BYTES_PER_PIXEL = 4;
-export const BYTES_PER_MIB = 1024 * 1024;
 
 export const STAR_CLASSES = Object.freeze({
   TINY: 0,
@@ -47,12 +51,12 @@ export const SPARSE_PATCH_MODES = Object.freeze({
 });
 
 export const DEFAULT_ADAPTIVE_QUALITY = Object.freeze({
-  adaptiveResolution: false,
+  adaptiveResolution: true,
   targetTexelsPerPixel: TEXELS_PER_PIXEL_TARGET,
-  minPatchSize: 256,
-  maxPatchSize: 4096,
-  patchBudgetMb: 128,
-  centerBias: 0.5,
+  minPatchSize: 1,
+  maxPatchSize: PATCH_SIZE_BUCKETS[PATCH_SIZE_BUCKETS.length - 1],
+  patchBudgetMb: STARFIELD_ALLOCATION_BUDGET_MIB,
+  centerBias: 0,
   sparseMode: SPARSE_PATCH_MODES.FULL,
 });
 

@@ -47,23 +47,22 @@ const STAR_VERTEX_SHADER = /* glsl */ `
   float splatSupportAngle(float rSize) {
     float bakeAngularPx = angularPixel(uBakeSize);
     float outputAngularPx = angularPixel(uOutputSize);
-    float referenceAngularPx = PI / uReferenceHeight;
 
     float scale = sizeMultiplier(rSize);
-    float starRadius = uStarSize * scale * referenceAngularPx;
-    float screenRadiusPx = starRadius / max(uScreenPixelAngle, 1e-8);
+    float starRadius = uStarSize * scale * uScreenPixelAngle;
+    float screenRadiusPx = uStarSize * scale;
     float pinWeight = 1.0 - smoothstep(SUBPIXEL_DENSITY_THRESHOLD_PX, AA_PIN_THRESHOLD_PX, screenRadiusPx);
     float normalCoreFloor = max(MIN_CORE_PIXELS * outputAngularPx, MIN_CORE_PIXELS * uScreenPixelAngle);
     float pinCoreFloor = max(outputAngularPx, 0.5 * uScreenPixelAngle);
-    float coreRadius = max(starRadius, mix(normalCoreFloor, pinCoreFloor, pinWeight));
-    float coreSigma = max(coreRadius * 0.45, bakeAngularPx);
+    float coreSupportRadius = max(starRadius, mix(normalCoreFloor, pinCoreFloor, pinWeight));
+    float coreSigma = max(coreSupportRadius * 0.45, bakeAngularPx);
 
     float glareSigma = 0.0;
     if (uGlareSize > 0.000001 && uGlareStr > 0.000001) {
       float normalWeight = smoothstep(AA_PIN_THRESHOLD_PX, AA_PIN_THRESHOLD_PX + 0.25, screenRadiusPx);
-      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * referenceAngularPx;
-      float glareEdge = max(starRadius + glareRadius, max(MIN_GLARE_PIXELS * outputAngularPx, MIN_GLARE_PIXELS * uScreenPixelAngle));
-      glareSigma = max(glareEdge * 0.36, bakeAngularPx) * normalWeight;
+      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * uScreenPixelAngle;
+      float glareSupportEdge = max(starRadius + glareRadius, max(MIN_GLARE_PIXELS * outputAngularPx, MIN_GLARE_PIXELS * uScreenPixelAngle));
+      glareSigma = max(glareSupportEdge * 0.36, bakeAngularPx) * normalWeight;
     }
 
     return max(coreSigma, glareSigma) * GAUSSIAN_CUTOFF_SIGMA;
@@ -156,35 +155,26 @@ const STAR_FRAGMENT_SHADER = /* glsl */ `
     float angularDistance = acos(clamp(dot(dir, normalize(vDirection)), -1.0, 1.0));
 
     float bakeAngularPx = angularPixel(uBakeSize);
-    float outputAngularPx = angularPixel(uOutputSize);
-    float referenceAngularPx = PI / uReferenceHeight;
 
     float scale = sizeMultiplier(vRandoms.x);
-    float referenceStarRadiusPx = uStarSize * scale;
-    float starRadius = referenceStarRadiusPx * referenceAngularPx;
-    float screenRadiusPx = starRadius / max(uScreenPixelAngle, 1e-8);
+    float starRadius = uStarSize * scale * uScreenPixelAngle;
+    float screenRadiusPx = uStarSize * scale;
     float subpixelWeight = 1.0 - smoothstep(SUBPIXEL_DENSITY_THRESHOLD_PX * 0.75, SUBPIXEL_DENSITY_THRESHOLD_PX, screenRadiusPx);
-    float pinWeight = 1.0 - smoothstep(SUBPIXEL_DENSITY_THRESHOLD_PX, AA_PIN_THRESHOLD_PX, screenRadiusPx);
     float normalWeight = smoothstep(AA_PIN_THRESHOLD_PX, AA_PIN_THRESHOLD_PX + 0.25, screenRadiusPx);
-    float normalCoreFloor = max(MIN_CORE_PIXELS * outputAngularPx, MIN_CORE_PIXELS * uScreenPixelAngle);
-    float pinCoreFloor = max(outputAngularPx, 0.5 * uScreenPixelAngle);
-    float minCoreRadius = mix(normalCoreFloor, pinCoreFloor, pinWeight);
-    float coreRadius = max(starRadius, minCoreRadius);
-    float coreEnergy = min(1.0, starRadius / max(coreRadius, 1e-8));
+    float coreRadius = max(starRadius, uScreenPixelAngle * 0.1);
+    float coreEnergy = 1.0;
     float densityEnergy = max(0.08, smoothstep(0.0, SUBPIXEL_DENSITY_THRESHOLD_PX, screenRadiusPx));
     coreEnergy *= mix(1.0, densityEnergy, subpixelWeight);
-    float coreSigma = max(coreRadius * 0.45, bakeAngularPx);
+    float coreSigma = max(coreRadius * 0.45, bakeAngularPx * 0.5);
     float core = exp(-(angularDistance * angularDistance) / max(2.0 * coreSigma * coreSigma, 1e-10));
     core *= coreEnergy;
 
     float glare = 0.0;
     if (uGlareSize > 0.000001 && uGlareStr > 0.000001) {
-      float referenceGlareRadiusPx = uGlareSize * mix(1.0, scale, uSizeVar);
-      float glareRadius = referenceGlareRadiusPx * referenceAngularPx;
-      float minGlareRadius = max(MIN_GLARE_PIXELS * outputAngularPx, MIN_GLARE_PIXELS * uScreenPixelAngle);
-      float glareEdge = max(starRadius + glareRadius, minGlareRadius);
-      float glareEnergy = min(1.0, (starRadius + glareRadius) / max(glareEdge, 1e-8));
-      float glareSigma = max(glareEdge * 0.36, bakeAngularPx);
+      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * uScreenPixelAngle;
+      float glareEdge = max(starRadius + glareRadius, uScreenPixelAngle * 0.1);
+      float glareEnergy = 1.0;
+      float glareSigma = max(glareEdge * 0.36, bakeAngularPx * 0.5);
       glare = exp(-(angularDistance * angularDistance) / max(2.0 * glareSigma * glareSigma, 1e-10));
       glare *= glareEnergy * normalWeight;
     }
@@ -226,17 +216,16 @@ const OVERLAY_VERTEX_SHADER = /* glsl */ `
   }
 
   float overlaySupportAngle(float rSize) {
-    float referenceAngularPx = PI / uReferenceHeight;
     float scale = sizeMultiplier(rSize);
-    float starRadius = uStarSize * scale * referenceAngularPx;
-    float coreRadius = max(starRadius, MIN_CORE_PIXELS * uScreenPixelAngle);
-    float coreSigma = max(coreRadius * 0.42, uScreenPixelAngle * 0.5);
+    float starRadius = uStarSize * scale * uScreenPixelAngle;
+    float coreSupportRadius = max(starRadius, MIN_CORE_PIXELS * uScreenPixelAngle);
+    float coreSigma = max(coreSupportRadius * 0.42, uScreenPixelAngle * 0.5);
     float glareSigma = 0.0;
 
     if (uGlareSize > 0.000001 && uGlareStr > 0.000001) {
-      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * referenceAngularPx;
-      float glareEdge = max(starRadius + glareRadius, MIN_GLARE_PIXELS * uScreenPixelAngle);
-      glareSigma = max(glareEdge * 0.36, uScreenPixelAngle * 0.5);
+      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * uScreenPixelAngle;
+      float glareSupportEdge = max(starRadius + glareRadius, MIN_GLARE_PIXELS * uScreenPixelAngle);
+      glareSigma = max(glareSupportEdge * 0.36, uScreenPixelAngle * 0.5);
     }
 
     return max(max(coreSigma, glareSigma) * GAUSSIAN_CUTOFF_SIGMA, uScreenPixelAngle * 2.0);
@@ -296,19 +285,18 @@ const OVERLAY_FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     float angularDistance = length(vLocal) * vSupportAngle;
-    float referenceAngularPx = PI / uReferenceHeight;
     float scale = sizeMultiplier(vRandoms.x);
-    float starRadius = uStarSize * scale * referenceAngularPx;
-    float coreRadius = max(starRadius, MIN_CORE_PIXELS * uScreenPixelAngle);
+    float starRadius = uStarSize * scale * uScreenPixelAngle;
+    float coreRadius = max(starRadius, uScreenPixelAngle * 0.1);
     float coreSigma = max(coreRadius * 0.42, uScreenPixelAngle * 0.5);
-    float coreEnergy = min(1.0, starRadius / max(coreRadius, 1e-8));
+    float coreEnergy = 1.0;
     float core = exp(-(angularDistance * angularDistance) / max(2.0 * coreSigma * coreSigma, 1e-10)) * coreEnergy;
 
     float glare = 0.0;
     if (uGlareSize > 0.000001 && uGlareStr > 0.000001) {
-      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * referenceAngularPx;
-      float glareEdge = max(starRadius + glareRadius, MIN_GLARE_PIXELS * uScreenPixelAngle);
-      float glareEnergy = min(1.0, (starRadius + glareRadius) / max(glareEdge, 1e-8));
+      float glareRadius = uGlareSize * mix(1.0, scale, uSizeVar) * uScreenPixelAngle;
+      float glareEdge = max(starRadius + glareRadius, uScreenPixelAngle * 0.1);
+      float glareEnergy = 1.0;
       float glareSigma = max(glareEdge * 0.36, uScreenPixelAngle * 0.5);
       glare = exp(-(angularDistance * angularDistance) / max(2.0 * glareSigma * glareSigma, 1e-10)) * glareEnergy;
     }
@@ -387,8 +375,10 @@ const PATCH_DOME_FRAGMENT_SHADER = /* glsl */ `
   uniform float uBlend;
   uniform vec2 uContentUvMin;
   uniform vec2 uContentUvSize;
-  uniform vec2 uInnerOffset;
-  uniform vec2 uInnerScale;
+  uniform vec2 uCurrentInnerOffset;
+  uniform vec2 uCurrentInnerScale;
+  uniform vec2 uNextInnerOffset;
+  uniform vec2 uNextInnerScale;
   varying vec3 vDirection;
 
   const float PI = 3.14159265359;
@@ -407,14 +397,16 @@ const PATCH_DOME_FRAGMENT_SHADER = /* glsl */ `
       discard;
     }
 
-    vec2 patchUv = uInnerOffset + clamp(localUv, 0.0, 1.0) * uInnerScale;
-    vec4 currentColor = texture2D(uCurrentTexture, patchUv);
+    vec2 clampedLocalUv = clamp(localUv, 0.0, 1.0);
+    vec2 currentPatchUv = uCurrentInnerOffset + clampedLocalUv * uCurrentInnerScale;
+    vec4 currentColor = texture2D(uCurrentTexture, currentPatchUv);
     if (uBlend <= 0.000001) {
       gl_FragColor = currentColor;
       return;
     }
 
-    vec4 nextColor = texture2D(uNextTexture, patchUv);
+    vec2 nextPatchUv = uNextInnerOffset + clampedLocalUv * uNextInnerScale;
+    vec4 nextColor = texture2D(uNextTexture, nextPatchUv);
     gl_FragColor = mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0));
   }
 `;
@@ -454,6 +446,11 @@ export function createDownsampleMaterial(uniforms) {
 }
 
 export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
+  const sampling = visibleTarget.starfieldSampling ?? {
+    innerOffset: descriptor.innerOffset,
+    innerScale: descriptor.innerScale,
+  };
+
   return new THREE.ShaderMaterial({
     uniforms: {
       uCurrentTexture: { value: visibleTarget.texture },
@@ -461,8 +458,10 @@ export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
       uBlend: { value: 0 },
       uContentUvMin: { value: descriptor.uvMin.clone() },
       uContentUvSize: { value: descriptor.uvSize.clone() },
-      uInnerOffset: { value: descriptor.innerOffset.clone() },
-      uInnerScale: { value: descriptor.innerScale.clone() },
+      uCurrentInnerOffset: { value: sampling.innerOffset.clone() },
+      uCurrentInnerScale: { value: sampling.innerScale.clone() },
+      uNextInnerOffset: { value: sampling.innerOffset.clone() },
+      uNextInnerScale: { value: sampling.innerScale.clone() },
     },
     side: THREE.BackSide,
     depthWrite: false,

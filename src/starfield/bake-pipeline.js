@@ -11,7 +11,7 @@ import {
   screenPixelAngleFromInfo,
 } from "./constants.js";
 import {
-  autoSupersampleForLayout,
+  autoSupersampleForDescriptor,
   descriptorPrecisionHeight,
   descriptorPrecisionWidth,
 } from "./patch-layout.js";
@@ -34,6 +34,8 @@ export function createBakePipeline({
   getPatchDescriptors,
   getSupersampleTarget,
   targetForDescriptor,
+  targetMatchesDescriptor = () => true,
+  releaseTarget = () => {},
   descriptorById,
   setStarBakeGeometry,
   createBakeGeometry,
@@ -42,6 +44,8 @@ export function createBakePipeline({
   updateDemandStats,
   notifyReadouts,
   setBakeStatus,
+  onDescriptorBaked = () => {},
+  onBakeQueueDrained = () => {},
   requestRender,
 }) {
   const bakeJobQueue = [];
@@ -55,6 +59,7 @@ export function createBakePipeline({
   let bakeQueueTimer = 0;
   let bakeTimer = 0;
   let cameraBakeTimer = 0;
+  let layerBakeTimer = 0;
   let lastCameraMotionAt = 0;
 
   function queueState() {
@@ -147,11 +152,13 @@ export function createBakePipeline({
     clearTimeout(bakeTimer);
     clearTimeout(bakeQueueTimer);
     clearTimeout(cameraBakeTimer);
+    clearTimeout(layerBakeTimer);
     bakeJobQueue.length = 0;
     queuedBakeJobsByPatchId.clear();
     activeBakeJob = null;
     bakeQueueTimer = 0;
     cameraBakeTimer = 0;
+    layerBakeTimer = 0;
     bakeQueueFrameRequested = false;
     syncBakeQueueStats();
   }
@@ -231,7 +238,10 @@ export function createBakePipeline({
   }
 
   function renderPatchDescriptor(descriptor, target) {
-    const currentSupersample = getCurrentSupersample();
+    const currentSupersample = Math.min(
+      getCurrentSupersample(),
+      autoSupersampleForDescriptor(descriptor, maxTextureSize),
+    );
     const internalWidth = descriptorPrecisionWidth(descriptor, currentSupersample);
     const internalHeight = descriptorPrecisionHeight(descriptor, currentSupersample);
     const sourcePerTarget = internalWidth / descriptor.storageSize.width;
@@ -264,40 +274,58 @@ export function createBakePipeline({
       skydome.finishDescriptorBlend(descriptor);
     }
 
-    if (!descriptor.currentTarget) {
-      const fallbackTarget = descriptor.nextTarget
-        ?? targetForDescriptor(descriptor, `Sparse skydome patch ${descriptor.x + 1},${descriptor.y + 1}`);
-      descriptor.nextTarget = fallbackTarget;
-      descriptor.target = null;
-      descriptor.fallbackState = FALLBACK_STATES.SPARSE;
-      descriptor.allocationState = ALLOCATION_STATES.ALLOCATED;
-      return fallbackTarget;
+    if (descriptor.nextTarget && !targetMatchesDescriptor(descriptor, descriptor.nextTarget)) {
+      releaseTarget(descriptor.nextTarget);
+      descriptor.nextTarget = null;
     }
 
-    if (descriptor.state === PATCH_STATES.EMPTY) {
+    if (descriptor.currentTarget) {
+      if (!targetMatchesDescriptor(descriptor, descriptor.currentTarget)) {
+        releaseTarget(descriptor.currentTarget);
+        descriptor.currentTarget = targetForDescriptor(descriptor, `Baked skydome patch ${descriptor.x + 1},${descriptor.y + 1}`);
+      }
+      descriptor.target = descriptor.currentTarget;
+      descriptor.nextTarget = null;
       descriptor.fallbackState = FALLBACK_STATES.EMPTY;
+      descriptor.allocationState = ALLOCATION_STATES.ALLOCATED;
       return descriptor.currentTarget;
     }
 
-    if (!descriptor.nextTarget) {
-      descriptor.nextTarget = targetForDescriptor(descriptor, `Next skydome patch ${descriptor.x + 1},${descriptor.y + 1}`);
-    }
-    descriptor.fallbackState = FALLBACK_STATES.CURRENT;
+    descriptor.currentTarget = targetForDescriptor(descriptor, `Baked skydome patch ${descriptor.x + 1},${descriptor.y + 1}`);
+    descriptor.target = descriptor.currentTarget;
+    descriptor.nextTarget = null;
+    descriptor.fallbackState = FALLBACK_STATES.EMPTY;
     descriptor.allocationState = ALLOCATION_STATES.ALLOCATED;
-    return descriptor.nextTarget;
+    return descriptor.currentTarget;
   }
 
   function markPatchDescriptorsQueued() {
     enqueueBakeJobs(getPatchDescriptors(), null, { replace: true });
   }
 
-  function markPatchDescriptorsStale() {
+  function markPatchDescriptorsStale(reason = "stale") {
     getPatchDescriptors().forEach((descriptor) => {
       if (descriptor.state === PATCH_STATES.RESIDENT) {
         descriptor.state = PATCH_STATES.STALE;
       }
+      if (descriptor.state !== PATCH_STATES.EMPTY && descriptor.state !== PATCH_STATES.EVICTING) {
+        descriptor.layerDirty = true;
+        descriptor.layerDirtyReason = reason;
+      }
     });
     updateDemandStats();
+  }
+
+  function scheduleLayerBakeJobs(descriptors, reason = "screen", delay = CAMERA_BAKE_IDLE_MS) {
+    if (!descriptors.length) return;
+
+    clearTimeout(layerBakeTimer);
+    layerBakeTimer = window.setTimeout(() => {
+      layerBakeTimer = 0;
+      enqueueBakeJobs(descriptors, reason);
+      requestBakeQueueProcessing();
+    }, Math.max(0, delay));
+    syncBakeQueueStats();
   }
 
   function processBakeQueueFrame() {
@@ -306,6 +334,7 @@ export function createBakePipeline({
       syncBakeQueueStats();
       if (!activeBakeJob) {
         setBakeStatus("Bake");
+        onBakeQueueDrained();
       }
       return;
     }
@@ -328,7 +357,7 @@ export function createBakePipeline({
       : Math.max(1, bakeJobQueue.length);
     let completedThisFrame = 0;
 
-    setCurrentSupersample(autoSupersampleForLayout(getCurrentPatchLayout(), maxTextureSize));
+    setCurrentSupersample(getCurrentPatchLayout().supersample ?? getCurrentSupersample());
     ensureStarCatalog();
     renderer.autoClear = true;
     renderer.setClearColor(0x000000, 0);
@@ -351,6 +380,7 @@ export function createBakePipeline({
       const patchStart = performance.now();
       renderPatchDescriptor(descriptor, bakeTarget);
       skydome.promoteDescriptorBakeTarget(descriptor, bakeTarget);
+      onDescriptorBaked(descriptor, bakeTarget);
       descriptor.lastBakeReason = job.reason;
       descriptor.lastBakePriority = job.priority;
       descriptor.lastBakeDurationMs = Number((performance.now() - patchStart).toFixed(2));
@@ -364,6 +394,7 @@ export function createBakePipeline({
     renderer.autoClear = previousAutoClear;
     renderer.setClearColor(previousClearColor, previousClearAlpha);
     stats.bakes += completedThisFrame;
+    setCurrentSupersample(getCurrentPatchLayout().supersample ?? getCurrentSupersample());
     updatePatchStats();
     stats.lastBakeMs = Number((performance.now() - bakeStart).toFixed(2));
     syncBakeQueueStats();
@@ -373,6 +404,7 @@ export function createBakePipeline({
       requestBakeQueueProcessing();
     } else {
       setBakeStatus("Bake");
+      onBakeQueueDrained();
     }
     notifyReadouts();
     requestRender();
@@ -381,7 +413,9 @@ export function createBakePipeline({
   function bakeNow() {
     clearTimeout(bakeTimer);
     clearTimeout(cameraBakeTimer);
+    clearTimeout(layerBakeTimer);
     cameraBakeTimer = 0;
+    layerBakeTimer = 0;
     lastQueuedCameraForward.copy(currentCameraForwardVector());
     completedBakeJobs = 0;
     totalQueuedBakeJobs = 0;
@@ -421,6 +455,7 @@ export function createBakePipeline({
   function dispose() {
     clearBakeQueue();
     clearTimeout(bakeTimer);
+    clearTimeout(layerBakeTimer);
   }
 
   return {
@@ -436,6 +471,7 @@ export function createBakePipeline({
     currentCameraForwardVector,
     markCurrentCameraQueued,
     markPatchDescriptorsStale,
+    scheduleLayerBakeJobs,
     ensureSupersampleTargetSize,
     sortBakeQueue,
     removeQueuedBakeJobForDescriptor,

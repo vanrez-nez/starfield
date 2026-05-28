@@ -385,9 +385,11 @@ body.is-ux-hidden #gpu-stats {
   z-index: 12;
   min-width: 220px;
   max-width: min(340px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 64px));
+  overflow-y: auto;
   border: 1px solid var(--hair);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 6px 0;
   background: #070a10;
   color: var(--ink);
   font-family: var(--mono);
@@ -400,12 +402,63 @@ body.is-ux-hidden #gpu-stats {
   transition:
     opacity 0.15s,
     transform 0.15s;
-  white-space: pre-wrap;
 }
 
 #gpu-stats.is-visible {
   opacity: 1;
+  pointer-events: auto;
   transform: translateY(0);
+}
+
+.gpu-stats-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.gpu-stats-group:first-child {
+  border-top: 0;
+}
+
+.gpu-stats-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 0 12px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  outline: 0;
+  text-transform: uppercase;
+}
+
+.gpu-stats-summary::-webkit-details-marker {
+  display: none;
+}
+
+.gpu-stats-summary::before {
+  width: 8px;
+  flex: 0 0 auto;
+  color: var(--dim);
+  content: ">";
+}
+
+.gpu-stats-group[open] > .gpu-stats-summary::before {
+  content: "v";
+}
+
+.gpu-stats-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.gpu-stats-lines {
+  margin: 0;
+  padding: 0 12px 9px 27px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 720px) {

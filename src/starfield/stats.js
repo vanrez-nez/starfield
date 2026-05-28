@@ -19,7 +19,8 @@ import {
   emptyStarClassStats,
   estimateTextureBytes,
   formatBytes,
-  requiredPatchBucket,
+  STARFIELD_ALLOCATION_BUDGET_BYTES,
+  STARFIELD_ALLOCATION_BUDGET_MIB,
   sizeLabel,
   sphereVerticalSegmentsFor,
   staleWeightForState,
@@ -48,15 +49,22 @@ export function createInitialStats({
     bakes: 0,
     renders: 0,
     textureWidth: defaults.bakeWidth,
-    textureHeight: defaults.bakeWidth / 2,
+    textureHeight: defaultPatchLayout.virtualHeight,
     supersampleMode: "auto",
     horizontalFov: 0,
     verticalFov: 0,
     supersample,
     maxSupersample: MAX_AUTO_SUPERSAMPLE,
     maxTextureSize,
+    allocationBudgetBytes: STARFIELD_ALLOCATION_BUDGET_BYTES,
+    allocationBudgetMemory: formatBytes(STARFIELD_ALLOCATION_BUDGET_BYTES),
+    allocationBudgetMiB: STARFIELD_ALLOCATION_BUDGET_MIB,
     accumulationType: accumulationTypeLabel,
     patchGrid: patchGridLabel(defaultPatchLayout),
+    autoPatchGrid: patchGridLabel(defaultPatchLayout),
+    autoVirtualSize: sizeLabel(defaultPatchLayout.virtualWidth, defaultPatchLayout.virtualHeight),
+    autoLayoutReason: defaultPatchLayout.autoLayoutReason ?? "initial",
+    catalogDirty: true,
     patchWidth: defaultPatchLayout.contentWidth,
     patchHeight: defaultPatchLayout.contentHeight,
     patchStorageWidth: defaultPatchLayout.storageWidth,
@@ -102,15 +110,12 @@ export function computeDemandReadouts(ctx) {
     adaptiveQuality,
     currentCameraInfo,
     currentPatchLayout,
-    maxTextureSize,
     bakeUniforms,
     catalogDirty,
     stats,
     activeSparseMode,
   } = ctx;
-  const targetTexelsPerPixel = adaptiveQuality.targetTexelsPerPixel;
-  const minPatchSize = Math.min(maxTextureSize, Math.max(1, adaptiveQuality.minPatchSize));
-  const maxPatchSize = Math.max(minPatchSize, Math.min(maxTextureSize, adaptiveQuality.maxPatchSize));
+  const targetTexelsPerPixel = currentPatchLayout.targetTexelsPerPixel ?? adaptiveQuality.targetTexelsPerPixel ?? 1;
   const horizontalFov = Number(currentCameraInfo.horizontalFov) || 0;
   const verticalFov = Number(currentCameraInfo.verticalFov) || 0;
   const horizontalFovRad = THREE.MathUtils.degToRad(Math.max(horizontalFov, 0.001));
@@ -129,29 +134,17 @@ export function computeDemandReadouts(ctx) {
   const patchAngularHeightRad = Math.PI / currentPatchLayout.rows;
   const patchAngularWidthDeg = THREE.MathUtils.radToDeg(patchAngularWidthRad);
   const patchAngularHeightDeg = THREE.MathUtils.radToDeg(patchAngularHeightRad);
-  const bucketDemand = requiredPatchBucket({
-    patchAngularWidthRad,
-    patchAngularHeightRad,
-    screenWidth,
-    screenHeight,
-    horizontalFovRad,
-    verticalFovRad,
-    texelsPerPixel: targetTexelsPerPixel,
-    minSize: minPatchSize,
-    maxSize: maxPatchSize,
-    maxTextureSize,
-  });
-  const projectedPatchWidthPixels = bucketDemand.projectedWidthPixels;
-  const projectedPatchHeightPixels = bucketDemand.projectedHeightPixels;
-  const projectedPatchPixels = bucketDemand.projectedPixels;
-  const requiredPatchTexelsX = bucketDemand.requiredWidth;
-  const requiredPatchTexelsY = bucketDemand.requiredHeight;
+  const projectedPatchWidthPixels = patchAngularWidthRad * pixelsPerRadianX;
+  const projectedPatchHeightPixels = patchAngularHeightRad * pixelsPerRadianY;
+  const requiredPatchTexelsX = currentPatchLayout.idealPatchWidth ?? projectedPatchWidthPixels * targetTexelsPerPixel;
+  const requiredPatchTexelsY = currentPatchLayout.idealPatchHeight ?? projectedPatchHeightPixels * targetTexelsPerPixel;
+  const projectedPatchPixels = Math.max(1, projectedPatchWidthPixels * projectedPatchHeightPixels);
   const requiredPatchTexelsMax = Math.max(requiredPatchTexelsX, requiredPatchTexelsY, 1);
-  const recommendedActualPatchWidth = bucketDemand.targetWidth;
-  const recommendedActualPatchHeight = bucketDemand.targetHeight;
-  const recommendedPatchBucket = bucketDemand.targetBucket;
+  const recommendedActualPatchWidth = currentPatchLayout.contentWidth;
+  const recommendedActualPatchHeight = currentPatchLayout.contentHeight;
+  const recommendedPatchBucket = Math.max(recommendedActualPatchWidth, recommendedActualPatchHeight);
   const currentPatchSize = Math.max(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight);
-  const oversampleRatio = currentPatchSize / requiredPatchTexelsMax;
+  const oversampleRatio = currentPatchLayout.qualityScale ?? currentPatchSize / requiredPatchTexelsMax;
   const totalStarCount = catalogStarCount(bakeUniforms);
   const totalOverlayCandidateCount = overlayCandidateStarCount({ bakeUniforms, catalogDirty, stats });
   const estimatedStarsPerPatch = totalStarCount / patchCount;
@@ -177,8 +170,8 @@ export function computeDemandReadouts(ctx) {
     adaptiveResolution: adaptiveQuality.adaptiveResolution,
     targetTexelsPerPixel,
     texelsPerPixelTarget: targetTexelsPerPixel,
-    minPatchSize,
-    maxPatchSize,
+    minPatchSize: 1,
+    maxPatchSize: Math.max(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight),
     patchBudgetMb: adaptiveQuality.patchBudgetMb,
     centerBias: adaptiveQuality.centerBias,
     sparseMode: adaptiveQuality.sparseMode,
@@ -197,11 +190,14 @@ export function computeDemandReadouts(ctx) {
     requiredPatchTexelsX,
     requiredPatchTexelsY,
     requiredPatchTexels: sizeLabel(requiredPatchTexelsX, requiredPatchTexelsY),
-    requiredPatchBucket: bucketDemand.requiredBucket,
+    requiredPatchBucket: Math.max(requiredPatchTexelsX, requiredPatchTexelsY),
     recommendedPatchBucket,
     recommendedActualPatchWidth,
     recommendedActualPatchHeight,
     recommendedActualRasterSize: sizeLabel(recommendedActualPatchWidth, recommendedActualPatchHeight),
+    idealVirtualSize: sizeLabel(currentPatchLayout.idealVirtualWidth ?? currentPatchLayout.virtualWidth, currentPatchLayout.idealVirtualHeight ?? currentPatchLayout.virtualHeight),
+    effectiveVirtualSize: sizeLabel(currentPatchLayout.effectiveVirtualWidth ?? currentPatchLayout.virtualWidth, currentPatchLayout.effectiveVirtualHeight ?? currentPatchLayout.virtualHeight),
+    qualityScale: currentPatchLayout.qualityScale ?? 1,
     currentPatchSize,
     oversampleRatio,
     undersampleWarning: oversampleRatio < 1,
@@ -226,18 +222,21 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
     maxTextureSize,
     accumulationType,
     targetManager,
+    allocationBudgetBytes,
+    bakeScratchBytes,
   } = ctx;
   const patchCount = Math.max(1, patchDescriptors.length);
   const residentTextureBytes = targetManager.activePatchTargetBytes();
   const accumulationBytesPerPixel = accumulationType === THREE.HalfFloatType ? 8 : 4;
   const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
-  const bakeScratchBytes = estimateTextureBytes(
+  const estimatedBakeScratchBytes = estimateTextureBytes(
     precisionSize.width,
     precisionSize.height,
     accumulationBytesPerPixel,
   );
+  const activeBakeScratchBytes = bakeScratchBytes ?? estimatedBakeScratchBytes;
   const pooledTargetMemoryBytes = targetManager.pooledTargetBytes();
-  const totalAllocatedBytes = residentTextureBytes + bakeScratchBytes + pooledTargetMemoryBytes;
+  const totalAllocatedBytes = residentTextureBytes + activeBakeScratchBytes + pooledTargetMemoryBytes;
   const recommendedStorageWidth = Math.min(maxTextureSize, demand.recommendedActualPatchWidth + currentPatchLayout.guard * 2);
   const recommendedStorageHeight = Math.min(maxTextureSize, demand.recommendedActualPatchHeight + currentPatchLayout.guard * 2);
   const recommendedResidentTextureBytes = estimateTextureBytes(
@@ -245,19 +244,23 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
     recommendedStorageHeight,
     FINAL_TEXTURE_BYTES_PER_PIXEL,
   ) * patchCount;
-  const patchBudgetBytes = Math.max(BYTES_PER_MIB, adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
+  const patchBudgetBytes = allocationBudgetBytes ?? Math.max(BYTES_PER_MIB, adaptiveQuality.patchBudgetMb * BYTES_PER_MIB);
 
   return {
     residentTextureBytes,
     residentTextureMemory: formatBytes(residentTextureBytes),
-    bakeScratchBytes,
-    bakeScratchMemory: formatBytes(bakeScratchBytes),
+    bakeScratchBytes: activeBakeScratchBytes,
+    bakeScratchMemory: formatBytes(activeBakeScratchBytes),
+    estimatedBakeScratchBytes,
+    estimatedBakeScratchMemory: formatBytes(estimatedBakeScratchBytes),
     pooledTargetBytes: pooledTargetMemoryBytes,
     pooledTargetMemory: formatBytes(pooledTargetMemoryBytes),
     totalAllocatedBytes,
     totalAllocatedMemory: formatBytes(totalAllocatedBytes),
     patchBudgetBytes,
     patchBudgetMemory: formatBytes(patchBudgetBytes),
+    allocationBudgetBytes: patchBudgetBytes,
+    allocationBudgetMemory: formatBytes(patchBudgetBytes),
     residentBudgetRatio: residentTextureBytes / patchBudgetBytes,
     totalAllocatedBudgetRatio: totalAllocatedBytes / patchBudgetBytes,
     residentBudgetExceeded: residentTextureBytes > patchBudgetBytes,
@@ -272,7 +275,80 @@ export function computeMemoryReadouts(ctx, demand = computeDemandReadouts(ctx)) 
   };
 }
 
-export function updatePatchDescriptorPriority({ descriptor, cameraForward, adaptiveQuality }) {
+function autoVirtualSizeForDescriptors(layout, descriptors) {
+  const targetWidth = descriptors.reduce((maxWidth, descriptor) => Math.max(maxWidth, descriptor.targetSize.width), 1);
+  const targetHeight = descriptors.reduce((maxHeight, descriptor) => Math.max(maxHeight, descriptor.targetSize.height), 1);
+  return sizeLabel(targetWidth * layout.columns, targetHeight * layout.rows);
+}
+
+function maxDescriptorTargetSize(descriptors) {
+  return descriptors.reduce((size, descriptor) => ({
+    width: Math.max(size.width, descriptor.targetSize?.width ?? 1),
+    height: Math.max(size.height, descriptor.targetSize?.height ?? 1),
+  }), { width: 1, height: 1 });
+}
+
+function maxDescriptorAssignedSize(descriptors) {
+  return descriptors.reduce((size, descriptor) => ({
+    width: Math.max(size.width, descriptor.assignedSize?.width ?? descriptor.targetSize.width),
+    height: Math.max(size.height, descriptor.assignedSize?.height ?? descriptor.targetSize.height),
+  }), { width: 1, height: 1 });
+}
+
+function sizeIsCapped(actual, optimal) {
+  return Math.round(actual.width) < Math.round(optimal.width)
+    || Math.round(actual.height) < Math.round(optimal.height);
+}
+
+function computeCapReadouts({
+  currentPatchLayout,
+  currentSupersample,
+  demand,
+  patchDescriptors,
+}) {
+  const targetSize = maxDescriptorTargetSize(patchDescriptors);
+  const assignedSize = maxDescriptorAssignedSize(patchDescriptors);
+  const storageSize = maxDescriptorStorageSize(patchDescriptors);
+  const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
+  const optimalPatchSize = {
+    width: Math.max(1, demand.requiredPatchTexelsX),
+    height: Math.max(1, demand.requiredPatchTexelsY),
+  };
+  const optimalVirtualSize = {
+    width: optimalPatchSize.width * currentPatchLayout.columns,
+    height: optimalPatchSize.height * currentPatchLayout.rows,
+  };
+  const optimalPatchStorageSize = {
+    width: optimalPatchSize.width + currentPatchLayout.guard * 2,
+    height: optimalPatchSize.height + currentPatchLayout.guard * 2,
+  };
+  const optimalInternalPatchSize = {
+    width: storageSize.width * MAX_AUTO_SUPERSAMPLE,
+    height: storageSize.height * MAX_AUTO_SUPERSAMPLE,
+  };
+
+  return {
+    optimalPatchSize: sizeLabel(optimalPatchSize.width, optimalPatchSize.height),
+    optimalVirtualSize: sizeLabel(optimalVirtualSize.width, optimalVirtualSize.height),
+    optimalPatchStorageSize: sizeLabel(optimalPatchStorageSize.width, optimalPatchStorageSize.height),
+    optimalInternalPatchSize: sizeLabel(optimalInternalPatchSize.width, optimalInternalPatchSize.height),
+    autoVirtualSizeCapped: sizeIsCapped({
+      width: targetSize.width * currentPatchLayout.columns,
+      height: targetSize.height * currentPatchLayout.rows,
+    }, optimalVirtualSize),
+    patchSizeCapped: sizeIsCapped(assignedSize, optimalPatchSize),
+    patchStorageSizeCapped: sizeIsCapped(storageSize, optimalPatchStorageSize),
+    internalPatchSizeCapped: sizeIsCapped(precisionSize, optimalInternalPatchSize),
+  };
+}
+
+export function updatePatchDescriptorPriority({
+  descriptor,
+  cameraForward,
+  adaptiveQuality,
+  currentPatchLayout,
+  maxTextureSize,
+}) {
   const cosAngle = Math.min(1, Math.max(-1,
     descriptor.centerDirection.x * cameraForward.x
       + descriptor.centerDirection.y * cameraForward.y
@@ -282,9 +358,14 @@ export function updatePatchDescriptorPriority({ descriptor, cameraForward, adapt
   const { centerScore, centerWeight } = centerWeightForCosine(cosAngle, adaptiveQuality.centerBias);
   const densityImportance = densityImportanceForPatch(descriptor);
   const staleWeight = staleWeightForState(descriptor.state);
+  const contentSize = adaptiveQuality.adaptiveResolution
+    ? descriptor.targetSize
+    : descriptor.logicalSize;
+  const assignedWidth = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.width)));
+  const assignedHeight = Math.min(maxTextureSize, Math.max(1, Math.round(contentSize.height)));
   const memoryCostBytes = estimateTextureBytes(
-    descriptor.storageSize.width,
-    descriptor.storageSize.height,
+    Math.min(maxTextureSize, assignedWidth + currentPatchLayout.guard * 2),
+    Math.min(maxTextureSize, assignedHeight + currentPatchLayout.guard * 2),
     FINAL_TEXTURE_BYTES_PER_PIXEL,
   );
   const memoryCost = Math.max(memoryCostBytes / BYTES_PER_MIB, 0.001);
@@ -311,54 +392,55 @@ export function updatePatchDescriptorDemand(ctx, demand) {
   } = ctx;
   const cameraForward = cameraForwardFromInfo(currentCameraInfo);
   patchDescriptors.forEach((descriptor) => {
-    const bucketDemand = requiredPatchBucket({
-      patchAngularWidthRad: descriptor.angularWidthRad,
-      patchAngularHeightRad: descriptor.angularHeightRad,
-      screenWidth: demand.screenWidth,
-      screenHeight: demand.screenHeight,
-      horizontalFovRad: demand.horizontalFovRad,
-      verticalFovRad: demand.verticalFovRad,
-      texelsPerPixel: demand.targetTexelsPerPixel,
-      minSize: demand.minPatchSize,
-      maxSize: demand.maxPatchSize,
-      maxTextureSize,
-    });
+    const projectedWidthPixels = descriptor.angularWidthRad * demand.pixelsPerRadianX;
+    const projectedHeightPixels = descriptor.angularHeightRad * demand.pixelsPerRadianY;
+    const projectedPixels = Math.max(1, projectedWidthPixels * projectedHeightPixels);
+    const requiredWidth = projectedWidthPixels * demand.targetTexelsPerPixel;
+    const requiredHeight = projectedHeightPixels * demand.targetTexelsPerPixel;
+    const targetWidth = descriptor.logicalSize.width;
+    const targetHeight = descriptor.logicalSize.height;
     descriptor.angularWidthRad = demand.patchAngularWidthRad;
     descriptor.angularHeightRad = demand.patchAngularHeightRad;
     descriptor.angularWidthDeg = demand.patchAngularWidthDeg;
     descriptor.angularHeightDeg = demand.patchAngularHeightDeg;
     descriptor.screenDemand = {
-      projectedWidthPixels: bucketDemand.projectedWidthPixels,
-      projectedHeightPixels: bucketDemand.projectedHeightPixels,
-      projectedPixels: bucketDemand.projectedPixels,
+      projectedWidthPixels,
+      projectedHeightPixels,
+      projectedPixels,
     };
     descriptor.requiredSize = {
-      width: bucketDemand.requiredWidth,
-      height: bucketDemand.requiredHeight,
-      bucket: bucketDemand.requiredBucket,
+      width: requiredWidth,
+      height: requiredHeight,
+      bucket: Math.max(requiredWidth, requiredHeight),
     };
     descriptor.currentSize = {
       ...descriptor.assignedSize,
     };
     descriptor.targetSize = {
-      width: bucketDemand.targetWidth,
-      height: bucketDemand.targetHeight,
-      bucket: bucketDemand.targetBucket,
+      width: targetWidth,
+      height: targetHeight,
+      bucket: Math.max(targetWidth, targetHeight),
     };
-    descriptor.requiredBucket = bucketDemand.requiredBucket;
-    descriptor.targetBucket = bucketDemand.targetBucket;
+    descriptor.requiredBucket = Math.max(requiredWidth, requiredHeight);
+    descriptor.targetBucket = Math.max(targetWidth, targetHeight);
     descriptor.estimatedStarCount = demand.estimatedStarsPerPatch;
-    descriptor.projectedPixels = bucketDemand.projectedPixels;
-    descriptor.starsPerProjectedPixel = descriptor.estimatedStarCount / Math.max(bucketDemand.projectedPixels, 1);
+    descriptor.projectedPixels = projectedPixels;
+    descriptor.starsPerProjectedPixel = descriptor.estimatedStarCount / Math.max(projectedPixels, 1);
     descriptor.densityScale = descriptor.starsPerProjectedPixel > 0
       ? Math.min(1, DENSITY_FALLBACK_STARS_PER_PIXEL / descriptor.starsPerProjectedPixel)
       : 1;
     descriptor.densityFallback = descriptor.densityScale < 1;
     descriptor.brightStarCount = demand.brightStarCount;
-    descriptor.brightStarPressure = descriptor.brightStarCount / Math.max(bucketDemand.projectedPixels, 1);
+    descriptor.brightStarPressure = descriptor.brightStarCount / Math.max(projectedPixels, 1);
     descriptor.downgraded = adaptiveQuality.adaptiveResolution
       && descriptor.assignedSize.bucket < descriptor.targetSize.bucket;
-    updatePatchDescriptorPriority({ descriptor, cameraForward, adaptiveQuality });
+    updatePatchDescriptorPriority({
+      descriptor,
+      cameraForward,
+      adaptiveQuality,
+      currentPatchLayout: ctx.currentPatchLayout,
+      maxTextureSize,
+    });
   });
 }
 
@@ -371,6 +453,7 @@ export function patchDescriptorSummary(ctx) {
     targetManager,
     activeSparseMode,
     activeBlendCount,
+    catalogDirty,
   } = ctx;
   const states = {};
   const allocationStates = {};
@@ -439,6 +522,13 @@ export function patchDescriptorSummary(ctx) {
     allocatedPatchCount: patchDescriptors.filter((descriptor) => descriptor.allocationState === "allocated").length,
     fallbackPatchCount: patchDescriptors.filter((descriptor) => descriptor.fallbackState !== "resident").length,
     nextTargetPatchCount: patchDescriptors.filter((descriptor) => descriptor.nextTarget).length,
+    layerDirtyPatchCount: patchDescriptors.filter((descriptor) => descriptor.layerDirty).length,
+    pendingLayerPatchCount: patchDescriptors.filter((descriptor) => descriptor.pendingLayerBakeKey).length,
+    catalogDirty,
+    pendingAutoLayout: stats.pendingAutoLayout ?? false,
+    autoPatchGrid: patchGridLabel(ctx.currentPatchLayout),
+    autoVirtualSize: autoVirtualSizeForDescriptors(ctx.currentPatchLayout, patchDescriptors),
+    autoLayoutReason: ctx.currentPatchLayout.autoLayoutReason ?? stats.autoLayoutReason ?? "automatic",
     activeTargetCount: targetManager.activePatchTargets.size,
     pooledTargetCount: targetManager.pooledTargets().length,
     pooledTargetsByBucket: pooledByBucket,
@@ -524,6 +614,12 @@ export function patchDescriptorSummary(ctx) {
       lastBakeReason: descriptor.lastBakeReason,
       lastBakePriority: descriptor.lastBakePriority,
       lastBakeDurationMs: descriptor.lastBakeDurationMs,
+      lastBakedLayerKey: descriptor.lastBakedLayerKey,
+      lastBakedScreenSignatureKey: descriptor.lastBakedScreenSignatureKey,
+      lastBakedStorageSize: descriptor.lastBakedStorageSize ? { ...descriptor.lastBakedStorageSize } : null,
+      pendingLayerBakeKey: descriptor.pendingLayerBakeKey,
+      layerDirty: descriptor.layerDirty,
+      layerDirtyReason: descriptor.layerDirtyReason,
       blendActive: descriptor.blendActive,
       blendProgress: descriptor.blendProgress,
       priorityRank: descriptor.priorityRank,
@@ -560,13 +656,21 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}) {
   updatePatchDescriptorDemand(ctx, demand);
   ctx.syncOverlayStats();
   const descriptors = patchDescriptorSummary(ctx);
+  const capReadouts = computeCapReadouts({
+    currentPatchLayout,
+    currentSupersample,
+    demand,
+    patchDescriptors,
+  });
   const storageSize = maxDescriptorStorageSize(patchDescriptors);
+  const assignedSize = maxDescriptorAssignedSize(patchDescriptors);
   const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
   const result = {
     ...stats,
     ...demand,
     ...memory,
     ...descriptors,
+    ...capReadouts,
     frame: rendererInfo.render.frame,
     drawCalls: rendererInfo.render.calls,
     callFrames: `${rendererInfo.render.calls}/${rendererInfo.render.frame}`,
@@ -578,9 +682,13 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}) {
     textures: rendererInfo.memory.textures,
     shaderPrograms: rendererInfo.programs?.length ?? 0,
     virtualSize: sizeLabel(currentPatchLayout.virtualWidth, currentPatchLayout.virtualHeight),
+    autoVirtualSize: autoVirtualSizeForDescriptors(currentPatchLayout, patchDescriptors),
+    autoPatchGrid: patchGridLabel(currentPatchLayout),
+    autoLayoutReason: currentPatchLayout.autoLayoutReason ?? stats.autoLayoutReason ?? "automatic",
+    catalogDirty: ctx.catalogDirty,
     patchGrid: patchGridLabel(currentPatchLayout),
     patchCount: patchDescriptors.length,
-    patchSize: sizeLabel(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight),
+    patchSize: sizeLabel(assignedSize.width, assignedSize.height),
     patchStorageSize: sizeLabel(storageSize.width, storageSize.height),
     internalPatchSize: sizeLabel(precisionSize.width, precisionSize.height),
     supersample: `${currentSupersample}x`,
@@ -605,15 +713,27 @@ export function updatePatchStats(ctx) {
     bakeUniforms,
   } = ctx;
   const storageSize = maxDescriptorStorageSize(patchDescriptors);
+  const assignedSize = maxDescriptorAssignedSize(patchDescriptors);
   const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
+  const demand = computeDemandReadouts(ctx);
+  const capReadouts = computeCapReadouts({
+    currentPatchLayout,
+    currentSupersample,
+    demand,
+    patchDescriptors,
+  });
   stats.textureWidth = currentBakeWidth;
-  stats.textureHeight = currentBakeWidth / 2;
+  stats.textureHeight = currentPatchLayout.virtualHeight;
   stats.supersample = currentSupersample;
   stats.maxTextureSize = maxTextureSize;
   stats.accumulationType = accumulationTypeLabel;
   stats.patchGrid = patchGridLabel(currentPatchLayout);
-  stats.patchWidth = currentPatchLayout.contentWidth;
-  stats.patchHeight = currentPatchLayout.contentHeight;
+  stats.autoPatchGrid = patchGridLabel(currentPatchLayout);
+  stats.autoVirtualSize = autoVirtualSizeForDescriptors(currentPatchLayout, patchDescriptors);
+  stats.autoLayoutReason = currentPatchLayout.autoLayoutReason ?? stats.autoLayoutReason ?? "automatic";
+  Object.assign(stats, capReadouts);
+  stats.patchWidth = assignedSize.width;
+  stats.patchHeight = assignedSize.height;
   stats.patchStorageWidth = storageSize.width;
   stats.patchStorageHeight = storageSize.height;
   stats.patchGuard = currentPatchLayout.guard;

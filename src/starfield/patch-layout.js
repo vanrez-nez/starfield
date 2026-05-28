@@ -1,14 +1,19 @@
 import * as THREE from "three";
 import {
   ALLOCATION_STATES,
+  AUTO_PATCH_GRIDS,
   FALLBACK_STATES,
+  FINAL_TEXTURE_BYTES_PER_PIXEL,
   MAX_AUTO_SUPERSAMPLE,
+  PATCH_SIZE_ALIGNMENT,
   PATCH_CROSSFADE_MS,
   PATCH_GUARD_TEXELS,
   PATCH_STATES,
   REFERENCE_BAKE_WIDTH,
+  STARFIELD_ALLOCATION_BUDGET_BYTES,
   VIRTUAL_WIDTH_OPTIONS,
   equirectDirectionFromUv,
+  estimateTextureBytes,
 } from "./constants.js";
 
 export function basePatchGridFor(virtualWidth) {
@@ -50,6 +55,262 @@ export function createPatchLayout(virtualWidth, maxTextureSize) {
   return null;
 }
 
+export function createPatchLayoutForGrid({
+  columns,
+  rows = columns,
+  contentWidth,
+  contentHeight,
+  guard = columns === 1 ? 0 : PATCH_GUARD_TEXELS,
+  reason = "automatic",
+  demand = null,
+  supersample = 1,
+  qualityScale = 1,
+  idealVirtualWidth = contentWidth * columns,
+  idealVirtualHeight = contentHeight * rows,
+  idealPatchWidth = contentWidth,
+  idealPatchHeight = contentHeight,
+  allocation = null,
+  targetTexelsPerPixel = 1,
+}) {
+  const safeColumns = Math.max(1, Math.round(columns));
+  const safeRows = Math.max(1, Math.round(rows));
+  const safeContentWidth = Math.max(1, Math.round(contentWidth));
+  const safeContentHeight = Math.max(1, Math.round(contentHeight));
+  const storageWidth = safeContentWidth + guard * 2;
+  const storageHeight = safeContentHeight + guard * 2;
+
+  return {
+    virtualWidth: safeContentWidth * safeColumns,
+    virtualHeight: safeContentHeight * safeRows,
+    columns: safeColumns,
+    rows: safeRows,
+    guard,
+    contentWidth: safeContentWidth,
+    contentHeight: safeContentHeight,
+    storageWidth,
+    storageHeight,
+    autoLayout: true,
+    autoLayoutReason: reason,
+    autoLayoutDemand: demand,
+    supersample,
+    qualityScale,
+    idealVirtualWidth,
+    idealVirtualHeight,
+    effectiveVirtualWidth: safeContentWidth * safeColumns,
+    effectiveVirtualHeight: safeContentHeight * safeRows,
+    idealPatchWidth,
+    idealPatchHeight,
+    allocation,
+    targetTexelsPerPixel,
+  };
+}
+
+function accumulationBytesPerPixel(accumulationType) {
+  return accumulationType === THREE.HalfFloatType ? 8 : 4;
+}
+
+function alignTexels(value, alignment = PATCH_SIZE_ALIGNMENT) {
+  return Math.max(alignment, Math.ceil(Math.max(1, value) / alignment) * alignment);
+}
+
+function clampContentSize(value, maxContentSize) {
+  return Math.max(1, Math.min(maxContentSize, alignTexels(value)));
+}
+
+function candidateMemory({
+  storageWidth,
+  storageHeight,
+  patchCount,
+  supersample,
+  accumulationBytes,
+}) {
+  const residentBytes = estimateTextureBytes(storageWidth, storageHeight, FINAL_TEXTURE_BYTES_PER_PIXEL) * patchCount;
+  const scratchBytes = estimateTextureBytes(
+    storageWidth * supersample,
+    storageHeight * supersample,
+    accumulationBytes,
+  );
+  return {
+    residentBytes,
+    scratchBytes,
+    peakBytes: residentBytes + scratchBytes,
+  };
+}
+
+function chooseSupersample({
+  storageWidth,
+  storageHeight,
+  patchCount,
+  budgetBytes,
+  maxTextureSize,
+  accumulationBytes,
+}) {
+  const maxSupersample = Math.max(1, Math.min(
+    MAX_AUTO_SUPERSAMPLE,
+    Math.floor(maxTextureSize / Math.max(1, storageWidth)),
+    Math.floor(maxTextureSize / Math.max(1, storageHeight)),
+  ));
+
+  for (let supersample = maxSupersample; supersample >= 1; supersample -= 1) {
+    const memory = candidateMemory({
+      storageWidth,
+      storageHeight,
+      patchCount,
+      supersample,
+      accumulationBytes,
+    });
+    if (memory.peakBytes <= budgetBytes || supersample === 1) {
+      return {
+        supersample,
+        ...memory,
+        peakBudgetRatio: memory.peakBytes / budgetBytes,
+      };
+    }
+  }
+
+  return {
+    supersample: 1,
+    ...candidateMemory({
+      storageWidth,
+      storageHeight,
+      patchCount,
+      supersample: 1,
+      accumulationBytes,
+    }),
+    peakBudgetRatio: 1,
+  };
+}
+
+function buildMemoryBoundCandidate({
+  grid,
+  idealVirtualWidth,
+  idealVirtualHeight,
+  maxTextureSize,
+  budgetBytes,
+  accumulationBytes,
+}) {
+  const guard = grid === 1 ? 0 : PATCH_GUARD_TEXELS;
+  const maxContentWidth = Math.max(1, maxTextureSize - guard * 2);
+  const maxContentHeight = Math.max(1, maxTextureSize - guard * 2);
+  const idealPatchWidth = Math.max(1, idealVirtualWidth / grid);
+  const idealPatchHeight = Math.max(1, idealVirtualHeight / grid);
+  const textureScale = Math.min(
+    1,
+    maxContentWidth / idealPatchWidth,
+    maxContentHeight / idealPatchHeight,
+  );
+  const patchCount = grid * grid;
+  let scale = Math.max(0.001, textureScale);
+  let result = null;
+
+  for (let attempt = 0; attempt < 18; attempt += 1) {
+    const contentWidth = clampContentSize(idealPatchWidth * scale, maxContentWidth);
+    const contentHeight = clampContentSize(idealPatchHeight * scale, maxContentHeight);
+    const storageWidth = contentWidth + guard * 2;
+    const storageHeight = contentHeight + guard * 2;
+    const allocation = chooseSupersample({
+      storageWidth,
+      storageHeight,
+      patchCount,
+      budgetBytes,
+      maxTextureSize,
+      accumulationBytes,
+    });
+    result = {
+      contentWidth,
+      contentHeight,
+      storageWidth,
+      storageHeight,
+      allocation,
+      scale: Math.min(contentWidth / idealPatchWidth, contentHeight / idealPatchHeight, 1),
+    };
+
+    if (allocation.peakBytes <= budgetBytes) break;
+
+    const nextScale = scale * Math.sqrt(budgetBytes / Math.max(allocation.peakBytes, 1)) * 0.96;
+    if (Math.abs(nextScale - scale) < 0.001 || contentWidth <= PATCH_SIZE_ALIGNMENT || contentHeight <= PATCH_SIZE_ALIGNMENT) break;
+    scale = Math.max(0.001, nextScale);
+  }
+
+  return {
+    grid,
+    guard,
+    patchCount,
+    idealPatchWidth,
+    idealPatchHeight,
+    ...result,
+  };
+}
+
+export function createAutoPatchLayout({
+  cameraInfo,
+  maxTextureSize,
+  accumulationType = THREE.UnsignedByteType,
+}) {
+  const screenWidth = Math.max(1, Number(cameraInfo.screenWidth) || 1);
+  const screenHeight = Math.max(1, Number(cameraInfo.screenHeight) || 1);
+  const horizontalFovRad = THREE.MathUtils.degToRad(Math.max(Number(cameraInfo.horizontalFov) || 0, 0.001));
+  const verticalFovRad = THREE.MathUtils.degToRad(Math.max(Number(cameraInfo.verticalFov) || 0, 0.001));
+  const idealVirtualWidth = Math.max(1, screenWidth * ((Math.PI * 2) / horizontalFovRad));
+  const idealVirtualHeight = Math.max(1, screenHeight * (Math.PI / verticalFovRad));
+  const budgetBytes = STARFIELD_ALLOCATION_BUDGET_BYTES;
+  const accumulationBytes = accumulationBytesPerPixel(accumulationType);
+  const selectedGrid = AUTO_PATCH_GRIDS.find((grid) => {
+    const guard = grid === 1 ? 0 : PATCH_GUARD_TEXELS;
+    const maxContent = Math.max(1, maxTextureSize - guard * 2);
+    return idealVirtualWidth / grid <= maxContent
+      && idealVirtualHeight / grid <= maxContent;
+  }) ?? AUTO_PATCH_GRIDS[AUTO_PATCH_GRIDS.length - 1];
+  const candidate = buildMemoryBoundCandidate({
+    grid: selectedGrid,
+    idealVirtualWidth,
+    idealVirtualHeight,
+    maxTextureSize,
+    budgetBytes,
+    accumulationBytes,
+  });
+  const budgetExceeded = candidate.allocation.peakBytes > budgetBytes;
+
+  return createPatchLayoutForGrid({
+    columns: selectedGrid,
+    contentWidth: candidate.contentWidth,
+    contentHeight: candidate.contentHeight,
+    guard: candidate.guard,
+    reason: budgetExceeded
+      ? "budget-minimum"
+      : candidate.scale < 0.995
+        ? "budget-scaled"
+        : "screen-fit",
+    supersample: candidate.allocation.supersample,
+    qualityScale: candidate.scale,
+    idealVirtualWidth,
+    idealVirtualHeight,
+    idealPatchWidth: candidate.idealPatchWidth,
+    idealPatchHeight: candidate.idealPatchHeight,
+    allocation: {
+      budgetBytes,
+      residentBytes: candidate.allocation.residentBytes,
+      scratchBytes: candidate.allocation.scratchBytes,
+      peakBytes: candidate.allocation.peakBytes,
+      peakBudgetRatio: candidate.allocation.peakBudgetRatio,
+      budgetExceeded,
+    },
+    targetTexelsPerPixel: 1,
+    demand: {
+      idealVirtualWidth,
+      idealVirtualHeight,
+      effectiveVirtualWidth: candidate.contentWidth * selectedGrid,
+      effectiveVirtualHeight: candidate.contentHeight * selectedGrid,
+      qualityScale: candidate.scale,
+      budgetBytes,
+      residentBytes: candidate.allocation.residentBytes,
+      scratchBytes: candidate.allocation.scratchBytes,
+      peakBytes: candidate.allocation.peakBytes,
+      budgetExceeded,
+    },
+  });
+}
+
 export function supportedBakeWidths(maxTextureSize) {
   return VIRTUAL_WIDTH_OPTIONS.filter((width) => createPatchLayout(width, maxTextureSize) !== null);
 }
@@ -65,6 +326,29 @@ export function autoSupersampleForLayout(layout, maxTextureSize) {
   const heightLimit = Math.floor(maxTextureSize / layout.storageHeight);
   const textureLimit = Math.min(widthLimit, heightLimit);
   return Math.max(1, Math.min(MAX_AUTO_SUPERSAMPLE, textureLimit));
+}
+
+export function autoSupersampleForStorage(width, height, maxTextureSize) {
+  const widthLimit = Math.floor(maxTextureSize / Math.max(1, width));
+  const heightLimit = Math.floor(maxTextureSize / Math.max(1, height));
+  const textureLimit = Math.min(widthLimit, heightLimit);
+  return Math.max(1, Math.min(MAX_AUTO_SUPERSAMPLE, textureLimit));
+}
+
+export function autoSupersampleForDescriptor(descriptor, maxTextureSize) {
+  return autoSupersampleForStorage(
+    descriptor.storageSize.width,
+    descriptor.storageSize.height,
+    maxTextureSize,
+  );
+}
+
+export function autoSupersampleForDescriptors(descriptors, maxTextureSize) {
+  if (descriptors.length === 0) return 1;
+  return descriptors.reduce(
+    (sample, descriptor) => Math.min(sample, autoSupersampleForDescriptor(descriptor, maxTextureSize)),
+    MAX_AUTO_SUPERSAMPLE,
+  );
 }
 
 export function precisionWidthForLayout(layout, maxTextureSize) {
@@ -246,6 +530,14 @@ export function createPatchDescriptor(layout, x, y, maxTextureSize) {
     lastBakeReason: "new",
     lastBakePriority: 0,
     lastBakeDurationMs: 0,
+    lastBakedLayerKey: "",
+    lastBakedScreenSignature: null,
+    lastBakedScreenSignatureKey: "",
+    lastBakedTargetSize: null,
+    lastBakedStorageSize: null,
+    pendingLayerBakeKey: "",
+    pendingScreenSignature: null,
+    layerDirty: false,
     blendActive: false,
     blendStartMs: 0,
     blendDurationMs: PATCH_CROSSFADE_MS,

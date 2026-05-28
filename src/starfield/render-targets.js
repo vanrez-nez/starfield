@@ -140,18 +140,11 @@ export function createRenderTargetManager({ renderer }) {
     if (!target || target.starfieldPool?.inPool) return;
 
     activePatchTargets.delete(target);
-    const key = target.starfieldPool?.key
-      ?? targetPoolKey(renderTargetWidth(target), renderTargetHeight(target), target.texture.wrapS, target.texture.wrapT);
-    const pool = targetPoolListFor(key);
     target.starfieldPool = {
       ...target.starfieldPool,
-      key,
-      bucket: target.starfieldPool?.bucket
-        ?? targetPoolBucketForStorage(renderTargetWidth(target), renderTargetHeight(target)),
       inPool: true,
-      bytesPerPixel: FINAL_TEXTURE_BYTES_PER_PIXEL,
     };
-    pool.push(target);
+    target.dispose();
   }
 
   function disposePatchTarget(target) {

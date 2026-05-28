@@ -35,6 +35,13 @@ export function createSkydomeManager({
     return descriptor.currentTarget ?? descriptor.target ?? fallbackPatchTarget;
   }
 
+  function samplingForTarget(target, descriptor) {
+    return target?.starfieldSampling ?? {
+      innerOffset: descriptor.innerOffset,
+      innerScale: descriptor.innerScale,
+    };
+  }
+
   function createPatchDomeMesh(descriptor) {
     const geometry = createDomeGeometry();
     const material = createPatchDomeMaterial({
@@ -51,8 +58,14 @@ export function createSkydomeManager({
 
   function setDescriptorMaterialTextures(descriptor, currentTarget, nextTarget = currentTarget, blend = 0) {
     if (!descriptor.material || !currentTarget) return;
+    const currentSampling = samplingForTarget(currentTarget, descriptor);
+    const nextSampling = samplingForTarget(nextTarget ?? currentTarget, descriptor);
     descriptor.material.uniforms.uCurrentTexture.value = currentTarget.texture;
     descriptor.material.uniforms.uNextTexture.value = (nextTarget ?? currentTarget).texture;
+    descriptor.material.uniforms.uCurrentInnerOffset.value.copy(currentSampling.innerOffset);
+    descriptor.material.uniforms.uCurrentInnerScale.value.copy(currentSampling.innerScale);
+    descriptor.material.uniforms.uNextInnerOffset.value.copy(nextSampling.innerOffset);
+    descriptor.material.uniforms.uNextInnerScale.value.copy(nextSampling.innerScale);
     descriptor.material.uniforms.uBlend.value = blend;
   }
 

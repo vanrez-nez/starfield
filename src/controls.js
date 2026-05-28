@@ -1,30 +1,6 @@
 const PARAMS = [
   { group: "Display" },
   { key: "sphereSegments", label: "Sphere Segments", min: 16, max: 256, step: 16, format: (v) => v.toFixed(0), kind: "display" },
-  { group: "Adaptive" },
-  { key: "adaptiveResolution", label: "Adaptive Resolution", kind: "adaptiveToggle", format: (v) => (v ? "On" : "Off") },
-  { key: "targetTexelsPerPixel", label: "Target Texels/Pixel", min: 0.5, max: 3, step: 0.05, format: (v) => v.toFixed(2), kind: "adaptive" },
-  { key: "minPatchSize", label: "Min Patch Size", min: 128, max: 4096, step: 128, format: (v) => v.toFixed(0), kind: "adaptive" },
-  { key: "maxPatchSize", label: "Max Patch Size", min: 256, max: 8192, step: 256, format: (v) => v.toFixed(0), kind: "adaptive" },
-  { key: "patchBudgetMb", label: "Patch Budget", min: 16, max: 512, step: 16, format: (v) => `${v.toFixed(0)} MB`, kind: "adaptive" },
-  { key: "centerBias", label: "Center Bias", min: 0, max: 1, step: 0.05, format: (v) => v.toFixed(2), kind: "adaptive" },
-  {
-    key: "sparseMode",
-    label: "Sparse Mode",
-    kind: "adaptiveSelect",
-    options: [
-      { value: "full", label: "Full Grid" },
-      { value: "visible", label: "Visible Only" },
-      { value: "center", label: "Center Weighted" },
-      { value: "density", label: "Density Weighted" },
-    ],
-    format: (v) => ({
-      full: "Full",
-      visible: "Visible",
-      center: "Center",
-      density: "Density",
-    }[v] ?? "Full"),
-  },
   { group: "Field" },
   { key: "uDensity", label: "Density", min: 10, max: 360, step: 1, format: (v) => v.toFixed(0) },
   { key: "uSparsity", label: "Sparsity", min: 0, max: 0.97, step: 0.005, format: (v) => v.toFixed(3) },
@@ -61,6 +37,12 @@ function formatPercent(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatSizeWithOptimal(value, optimal, capped) {
+  const label = value ?? "0x0";
+  if (!capped || !optimal) return label;
+  return `${label} (optimal ${optimal})`;
+}
+
 function formatGpuStatsForPanel(stats) {
   return [
     "GPU Stats",
@@ -75,11 +57,15 @@ function formatGpuStatsForPanel(stats) {
     `Sphere: ${stats.sphereSegments}x${stats.sphereVerticalSegments}`,
     "",
     "Bake",
-    `Virtual: ${stats.virtualSize}`,
-    `Patches: ${stats.patchGrid} (${stats.patchCount})`,
-    `Patch Size: ${stats.patchSize}`,
-    `Patch Storage: ${stats.patchStorageSize}`,
-    `Internal Patch: ${stats.internalPatchSize}`,
+    `Auto Virtual: ${formatSizeWithOptimal(stats.autoVirtualSize ?? stats.virtualSize, stats.optimalVirtualSize, stats.autoVirtualSizeCapped)}`,
+    `Ideal Virtual: ${stats.idealVirtualSize ?? stats.optimalVirtualSize ?? "0x0"}`,
+    `Effective Virtual: ${stats.effectiveVirtualSize ?? stats.autoVirtualSize ?? stats.virtualSize ?? "0x0"}`,
+    `Quality Scale: ${formatPercent(stats.qualityScale)}`,
+    `Auto Grid: ${stats.autoPatchGrid ?? stats.patchGrid} (${stats.patchCount})`,
+    `Auto Reason: ${stats.autoLayoutReason ?? "automatic"}`,
+    `Patch Size: ${formatSizeWithOptimal(stats.patchSize, stats.optimalPatchSize, stats.patchSizeCapped)}`,
+    `Patch Storage: ${formatSizeWithOptimal(stats.patchStorageSize, stats.optimalPatchStorageSize, stats.patchStorageSizeCapped)}`,
+    `Internal Patch: ${formatSizeWithOptimal(stats.internalPatchSize, stats.optimalInternalPatchSize, stats.internalPatchSizeCapped)}`,
     `Supersample: ${stats.supersample}`,
     `GPU Limit: ${stats.maxTextureSize}`,
     "",
@@ -89,6 +75,10 @@ function formatGpuStatsForPanel(stats) {
     `Allocated: ${stats.allocatedPatchCount ?? 0}`,
     `Fallbacks: ${stats.fallbackPatchCount ?? 0}`,
     `Next Targets: ${stats.nextTargetPatchCount ?? 0}`,
+    `Layer Dirty: ${stats.layerDirtyPatchCount ?? 0}`,
+    `Pending Layers: ${stats.pendingLayerPatchCount ?? 0}`,
+    `Catalog Dirty: ${stats.catalogDirty ? "yes" : "no"}`,
+    `Layout Pending: ${stats.pendingAutoLayout ? "yes" : "no"}`,
     `Downgraded: ${stats.downgradedPatchCount ?? 0}`,
     `States: ${stats.patchStateSummary ?? "none"}`,
     `Allocations: ${stats.allocationStateSummary ?? "none"}`,
@@ -103,21 +93,14 @@ function formatGpuStatsForPanel(stats) {
     `Range: ${formatNumber(stats.lowestPriority, 1)}-${formatNumber(stats.highestPriority, 1)}`,
     `Top: ${stats.topPrioritySummary ?? "none"}`,
     "",
-    "Adaptive",
-    `Enabled: ${stats.adaptiveResolution ? "yes" : "no"}`,
-    `Target Texels/Pixel: ${formatNumber(stats.targetTexelsPerPixel, 2)}x`,
-    `Patch Limits: ${formatInteger(stats.minPatchSize)}-${formatInteger(stats.maxPatchSize)}`,
-    `Patch Budget: ${stats.patchBudgetMemory ?? "0 B"}`,
-    `Center Bias: ${formatNumber(stats.centerBias, 2)}`,
-    `Sparse Mode: ${stats.sparseMode ?? "full"}`,
-    `Effective Sparse: ${stats.effectiveSparseMode ?? "full"}`,
-    `Sparse Wanted: ${stats.sparseWantedPatchCount ?? 0}`,
-    `Sparse Resident: ${stats.sparseResidentPatchCount ?? 0}`,
-    `Sparse Evicted: ${stats.sparseEvictedPatchCount ?? 0}`,
-    `Sparse Fallbacks: ${stats.sparseFallbackPatchCount ?? 0}`,
-    `Sparse Visible: ${stats.sparseVisiblePatchCount ?? 0}`,
-    `Sparse Budget: ${stats.sparseBudgetUsedMemory ?? "0 B"} (${formatPercent(stats.sparseBudgetRatio)})`,
-    `Sparse Selection: ${stats.sparseSelectionSummary ?? "none"}`,
+    "Allocation",
+    `Automatic: yes`,
+    `Allocation Budget: ${stats.allocationBudgetMemory ?? stats.patchBudgetMemory ?? "0 B"}`,
+    `Resident: ${stats.residentTextureMemory ?? "0 B"} (${formatPercent(stats.residentBudgetRatio)})`,
+    `Scratch: ${stats.bakeScratchMemory ?? "0 B"}`,
+    `Pool: ${stats.pooledTargetMemory ?? "0 B"}`,
+    `Total Allocated: ${stats.totalAllocatedMemory ?? "0 B"} (${formatPercent(stats.totalAllocatedBudgetRatio)})`,
+    `Peak Estimate: ${stats.estimatedBakeScratchMemory ?? "0 B"} scratch`,
     `Recommended Raster: ${stats.recommendedActualRasterSize ?? "0x0"}`,
     `Recommended Storage: ${stats.recommendedPatchStorageSize ?? "0x0"}`,
     `Recommended Resident: ${stats.recommendedResidentTextureMemory ?? "0 B"} (${formatPercent(stats.recommendedResidentBudgetRatio)})`,
@@ -196,14 +179,14 @@ function formatGpuStatsForPanel(stats) {
 }
 
 export function createControls({ rows, buttons, starfield, getStats, onRecenter }) {
-  const gpuStatsPanel = document.createElement("pre");
+  const gpuStatsPanel = document.createElement("div");
   gpuStatsPanel.id = "gpu-stats";
   gpuStatsPanel.setAttribute("aria-live", "polite");
   document.body.append(gpuStatsPanel);
 
-  let textureSizeValue = null;
   let updatingStatsPanel = false;
   let uxVisible = true;
+  const collapsedStatsGroups = new Set();
 
   function isUxVisible() {
     return uxVisible;
@@ -244,7 +227,6 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   }
 
   function refreshReadouts(readouts = starfield.getReadouts()) {
-    if (textureSizeValue) textureSizeValue.textContent = String(readouts.bakeWidth);
     refreshVisibleStatsPanel();
   }
 
@@ -379,42 +361,6 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     paint(select.value);
   }
 
-  function addTextureSizeRow() {
-    const readouts = starfield.getReadouts();
-    const row = document.createElement("div");
-    row.className = "row row--select";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const label = document.createElement("label");
-    label.textContent = "Virtual Size";
-
-    textureSizeValue = document.createElement("span");
-    textureSizeValue.className = "val";
-    textureSizeValue.textContent = `${readouts.bakeWidth}`;
-
-    const select = document.createElement("select");
-    select.id = "bake-size";
-
-    readouts.supportedBakeWidths.forEach((width) => {
-      const option = document.createElement("option");
-      option.value = String(width);
-      option.textContent = `${width}x${width / 2}`;
-      option.selected = width === readouts.bakeWidth;
-      select.append(option);
-    });
-
-    select.addEventListener("change", () => {
-      starfield.setBakeWidth(Number(select.value));
-      refreshReadouts();
-    });
-
-    top.append(label, textureSizeValue);
-    row.append(top, select);
-    rows.append(row);
-  }
-
   function buildPanel() {
     PARAMS.forEach((param) => {
       if (param.group) {
@@ -437,16 +383,67 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
 
       addRangeRow(param);
     });
+  }
 
-    const group = document.createElement("div");
-    group.className = "group";
-    group.textContent = "Bake";
-    rows.append(group);
-    addTextureSizeRow();
+  function createStatsGroups(stats) {
+    const groups = [];
+    let currentGroup = null;
+
+    formatGpuStatsForPanel(stats)
+      .split("\n")
+      .forEach((line) => {
+        if (!line) {
+          currentGroup = null;
+          return;
+        }
+
+        if (!currentGroup) {
+          currentGroup = { title: line, lines: [] };
+          groups.push(currentGroup);
+          return;
+        }
+
+        currentGroup.lines.push(line);
+      });
+
+    return groups;
+  }
+
+  function renderGpuStatsGroups(stats) {
+    const fragment = document.createDocumentFragment();
+    const groups = createStatsGroups(stats);
+
+    groups.forEach((group) => {
+      const details = document.createElement("details");
+      details.className = "gpu-stats-group";
+      details.open = !collapsedStatsGroups.has(group.title);
+      details.dataset.group = group.title;
+
+      const summary = document.createElement("summary");
+      summary.className = "gpu-stats-summary";
+      summary.textContent = group.title;
+
+      const lines = document.createElement("pre");
+      lines.className = "gpu-stats-lines";
+      lines.textContent = group.lines.join("\n");
+
+      details.addEventListener("toggle", () => {
+        if (details.open) {
+          collapsedStatsGroups.delete(group.title);
+          return;
+        }
+        collapsedStatsGroups.add(group.title);
+      });
+
+      details.append(summary, lines);
+      fragment.append(details);
+    });
+
+    gpuStatsPanel.replaceChildren(fragment);
   }
 
   function showGpuStatsPanel(stats) {
-    gpuStatsPanel.textContent = formatGpuStatsForPanel(stats);
+    renderGpuStatsGroups(stats);
     gpuStatsPanel.classList.add("is-visible");
   }
 
