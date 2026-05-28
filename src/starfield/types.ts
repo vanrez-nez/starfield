@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import type * as THREE from "three/webgpu";
 
 export type RequestRender = () => void;
 
@@ -93,7 +93,7 @@ export interface PatchRenderTargetMetadata {
   };
 }
 
-export type PatchRenderTarget = THREE.WebGLRenderTarget & PatchRenderTargetMetadata;
+export type PatchRenderTarget = THREE.RenderTarget & PatchRenderTargetMetadata;
 
 export interface PatchTextureTarget {
   texture: THREE.Texture;
@@ -101,6 +101,8 @@ export interface PatchTextureTarget {
 }
 
 export type VisiblePatchTarget = PatchTextureTarget | PatchRenderTarget;
+
+export type StarfieldMaterial = THREE.Material & { uniforms: UniformMap };
 
 export interface PatchDescriptor {
   id: string;
@@ -136,8 +138,8 @@ export interface PatchDescriptor {
   target: PatchRenderTarget | null;
   currentTarget: PatchRenderTarget | null;
   nextTarget: PatchRenderTarget | null;
-  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | null;
-  material: THREE.ShaderMaterial | null;
+  mesh: THREE.Mesh<THREE.BufferGeometry, StarfieldMaterial> | null;
+  material: StarfieldMaterial | null;
   wrapS: THREE.Wrapping;
   wrapT: THREE.Wrapping;
   fallbackState: string;
@@ -258,78 +260,82 @@ export type UniformValue =
   | THREE.Vector3
   | THREE.Vector3[];
 
-export type UniformMap = Record<string, THREE.IUniform<UniformValue>>;
-export type NumericUniformMap = Record<string, THREE.IUniform<number>>;
+export interface MutableUniform<T> {
+  value: T;
+}
+
+export type UniformMap = Record<string, MutableUniform<UniformValue>>;
+export type NumericUniformMap = Record<string, MutableUniform<number>>;
 
 export interface StarUniforms {
-  [key: string]: THREE.IUniform<UniformValue>;
-  uDensity: THREE.IUniform<number>;
-  uStarSize: THREE.IUniform<number>;
-  uSizeVar: THREE.IUniform<number>;
-  uLargeStarRarity: THREE.IUniform<number>;
-  uBright: THREE.IUniform<number>;
-  uBrightVar: THREE.IUniform<number>;
-  uGlareSize: THREE.IUniform<number>;
-  uGlareStr: THREE.IUniform<number>;
-  uGlareVar: THREE.IUniform<number>;
-  uColorVar: THREE.IUniform<number>;
-  uSeed: THREE.IUniform<number>;
+  [key: string]: MutableUniform<UniformValue>;
+  uDensity: MutableUniform<number>;
+  uStarSize: MutableUniform<number>;
+  uSizeVar: MutableUniform<number>;
+  uLargeStarRarity: MutableUniform<number>;
+  uBright: MutableUniform<number>;
+  uBrightVar: MutableUniform<number>;
+  uGlareSize: MutableUniform<number>;
+  uGlareStr: MutableUniform<number>;
+  uGlareVar: MutableUniform<number>;
+  uColorVar: MutableUniform<number>;
+  uSeed: MutableUniform<number>;
 }
 
 export interface BakeUniforms extends StarUniforms {
-  uBakeSize: THREE.IUniform<THREE.Vector2>;
-  uOutputSize: THREE.IUniform<THREE.Vector2>;
-  uTileUvMin: THREE.IUniform<THREE.Vector2>;
-  uTileUvSize: THREE.IUniform<THREE.Vector2>;
-  uScreenPixelAngle: THREE.IUniform<number>;
-  uReferenceHeight: THREE.IUniform<number>;
+  uBakeSize: MutableUniform<THREE.Vector2>;
+  uOutputSize: MutableUniform<THREE.Vector2>;
+  uTileUvMin: MutableUniform<THREE.Vector2>;
+  uTileUvSize: MutableUniform<THREE.Vector2>;
+  uScreenPixelAngle: MutableUniform<number>;
+  uReferenceHeight: MutableUniform<number>;
 }
 
 export interface OverlayUniforms extends StarUniforms {
-  uScreenPixelAngle: THREE.IUniform<number>;
-  uReferenceHeight: THREE.IUniform<number>;
-  uWinkleAmount: THREE.IUniform<number>;
-  uEffectMinSize: THREE.IUniform<number>;
-  uEffectMaxSize: THREE.IUniform<number>;
-  uWinkleSharpness: THREE.IUniform<number>;
-  uWinkleFlashiness: THREE.IUniform<number>;
+  uScreenPixelAngle: MutableUniform<number>;
+  uReferenceHeight: MutableUniform<number>;
+  uWinkleAmount: MutableUniform<number>;
+  uEffectMinSize: MutableUniform<number>;
+  uEffectMaxSize: MutableUniform<number>;
+  uWinkleSharpness: MutableUniform<number>;
+  uWinkleFlashiness: MutableUniform<number>;
 }
 
 export interface DownsampleUniforms extends UniformMap {
-  uSourceTexture: THREE.IUniform<THREE.Texture | null>;
-  uSourceSize: THREE.IUniform<THREE.Vector2>;
-  uTargetSize: THREE.IUniform<THREE.Vector2>;
-  uSourcePerTarget: THREE.IUniform<number>;
-  uExposure: THREE.IUniform<number>;
+  uSourceTexture: MutableUniform<THREE.Texture | null>;
+  uSourceSize: MutableUniform<THREE.Vector2>;
+  uTargetSize: MutableUniform<THREE.Vector2>;
+  uSourcePerTarget: MutableUniform<number>;
+  uExposure: MutableUniform<number>;
 }
 
 export interface BackgroundUniforms extends UniformMap {
-  uTileUvMin: THREE.IUniform<THREE.Vector2>;
-  uTileUvSize: THREE.IUniform<THREE.Vector2>;
-  uAnchorCount: THREE.IUniform<number>;
-  uBlend: THREE.IUniform<number>;
-  uPower: THREE.IUniform<number>;
-  uSigma: THREE.IUniform<number>;
-  uColorWarpAmp: THREE.IUniform<number>;
-  uColorWarpFreq: THREE.IUniform<number>;
-  uAnchorDir: THREE.IUniform<THREE.Vector3[]>;
-  uAnchorColor: THREE.IUniform<THREE.Vector3[]>;
-  uSeed: THREE.IUniform<number>;
-  uCoverage: THREE.IUniform<number>;
-  uDensity: THREE.IUniform<number>;
-  uSoftness: THREE.IUniform<number>;
-  uContrast: THREE.IUniform<number>;
-  uBaseScale: THREE.IUniform<number>;
-  uOctaves: THREE.IUniform<number>;
-  uOpacity: THREE.IUniform<number>;
-  uLightFocus: THREE.IUniform<number>;
-  uLightLining: THREE.IUniform<number>;
-  uLightIntensity: THREE.IUniform<number>;
-  uNebulaStrength: THREE.IUniform<number>;
-  uNebulaExposure: THREE.IUniform<number>;
-  uCloudShadow: THREE.IUniform<THREE.Vector3>;
-  uCloudHighlight: THREE.IUniform<THREE.Vector3>;
-  uCloudCore: THREE.IUniform<THREE.Vector3>;
+  uTileUvMin: MutableUniform<THREE.Vector2>;
+  uTileUvSize: MutableUniform<THREE.Vector2>;
+  uAnchorCount: MutableUniform<number>;
+  uBlend: MutableUniform<number>;
+  uPower: MutableUniform<number>;
+  uSigma: MutableUniform<number>;
+  uColorWarpAmp: MutableUniform<number>;
+  uColorWarpFreq: MutableUniform<number>;
+  uAnchorDir: MutableUniform<THREE.Vector3[]>;
+  uAnchorColor: MutableUniform<THREE.Vector3[]>;
+  uSeed: MutableUniform<number>;
+  uCoverage: MutableUniform<number>;
+  uDensity: MutableUniform<number>;
+  uSoftness: MutableUniform<number>;
+  uContrast: MutableUniform<number>;
+  uBaseScale: MutableUniform<number>;
+  uOctaves: MutableUniform<number>;
+  uOpacity: MutableUniform<number>;
+  uLightFocus: MutableUniform<number>;
+  uLightLining: MutableUniform<number>;
+  uLightIntensity: MutableUniform<number>;
+  uNebulaStrength: MutableUniform<number>;
+  uNebulaExposure: MutableUniform<number>;
+  uCloudShadow: MutableUniform<THREE.Vector3>;
+  uCloudHighlight: MutableUniform<THREE.Vector3>;
+  uCloudCore: MutableUniform<THREE.Vector3>;
 }
 
 export type StatsValue =
@@ -343,6 +349,22 @@ export type StatsValue =
   | Array<unknown>;
 
 export type StarfieldStats = Record<string, StatsValue>;
+
+export interface RendererInfoLike {
+  frame?: number;
+  render: {
+    frame?: number;
+    calls: number;
+    triangles: number;
+    points: number;
+    lines: number;
+  };
+  memory: {
+    geometries: number;
+    textures: number;
+  };
+  programs?: unknown[];
+}
 
 export interface FieldGradientAnchor {
   dir: [number, number, number];

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   ALLOCATION_STATES,
   BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
@@ -18,6 +18,7 @@ import {
   DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
   LIGHT_COMPOSITION_MAX_ANCHORS,
+  MIN_BACKGROUND_SPHERE_SEGMENTS,
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
   STARFIELD_ALLOCATION_BUDGET_BYTES,
@@ -73,6 +74,7 @@ import type {
   PatchRenderTarget,
   PatchTextureTarget,
   RequestRender,
+  RendererInfoLike,
   ScreenBakeSignature,
   StarLayerParams,
   StarfieldStats,
@@ -84,7 +86,7 @@ type BackgroundBakePipeline = ReturnType<typeof createBackgroundBakePipeline>;
 type DemandReadouts = ReturnType<typeof computeDemandReadoutsFromStats>;
 
 interface CreateStarfieldArgs {
-  renderer: THREE.WebGLRenderer;
+  renderer: THREE.Renderer;
   scene: THREE.Scene;
   requestRender: RequestRender;
 }
@@ -232,7 +234,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   };
   const defaults = {
     ...defaultStarParams,
-    sphereSegments: 32,
+    sphereSegments: 128,
     skyBackgroundEnabled: true,
     skyBackgroundRadius: DEFAULT_SKY_BACKGROUND_RADIUS,
     bakedStarsEnabled: true,
@@ -397,13 +399,9 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     requestRender,
     targetManager,
     fallbackPatchTarget: fallbackBackgroundTarget,
-    getSphereSegments: () => currentSphereSegments,
+    getSphereSegments: () => Math.max(currentSphereSegments, MIN_BACKGROUND_SPHERE_SEGMENTS),
     initialRadius: layerState.skyBackground.radius,
     createMaterial: createBackgroundPatchDomeMaterial,
-    geometryUvRangeForDescriptor: (descriptor) => ({
-      uvMin: descriptor.storageUvMin,
-      uvSize: descriptor.storageUvSize,
-    }),
     renderOrder: -10,
     onBlendStatsChange: () => {
       backgroundPipeline?.syncStats();
@@ -1212,7 +1210,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     backgroundPipeline.scheduleBake(delay);
   }
 
-  function collectStats(rendererInfo: THREE.WebGLInfo, cameraInfo: Partial<CameraInfo> = {}, options: { detail?: "panel" | "debug" } = {}) {
+  function collectStats(rendererInfo: RendererInfoLike, cameraInfo: Partial<CameraInfo> = {}, options: { detail?: "panel" | "debug" } = {}) {
     return collectStatsPayload(makeStatsContext(), rendererInfo, cameraInfo, options);
   }
 

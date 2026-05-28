@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   ALLOCATION_STATES,
   DOME_RADIUS,
@@ -13,6 +13,7 @@ import type {
   PatchRenderTarget,
   RequestRender,
   Size2,
+  StarfieldMaterial,
   VisiblePatchTarget,
 } from "./types";
 
@@ -25,7 +26,7 @@ interface SkydomeManagerArgs {
   fallbackPatchTarget: VisiblePatchTarget;
   getSphereSegments: () => number;
   initialRadius?: number;
-  createMaterial?: (args: { descriptor: PatchDescriptor; visibleTarget: VisiblePatchTarget }) => THREE.ShaderMaterial;
+  createMaterial?: (args: { descriptor: PatchDescriptor; visibleTarget: VisiblePatchTarget }) => StarfieldMaterial;
   geometryUvRangeForDescriptor?: (descriptor: PatchDescriptor) => {
     uvMin: THREE.Vector2;
     uvSize: THREE.Vector2;
@@ -94,7 +95,7 @@ export function createSkydomeManager({
     };
   }
 
-  function createPatchDomeMesh(descriptor: PatchDescriptor): THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial> {
+  function createPatchDomeMesh(descriptor: PatchDescriptor): THREE.Mesh<THREE.SphereGeometry, StarfieldMaterial> {
     const geometry = createDomeGeometry(descriptor);
     const material = createMaterial({
       descriptor,
@@ -116,21 +117,22 @@ export function createSkydomeManager({
     blend = 0,
   ): void {
     if (!descriptor.material || !currentTarget) return;
+    const uniforms = descriptor.material.uniforms as Record<string, { value: unknown }>;
     const currentSampling = samplingForTarget(currentTarget, descriptor);
     const nextSampling = samplingForTarget(nextTarget ?? currentTarget, descriptor);
-    descriptor.material.uniforms.uCurrentTexture.value = currentTarget.texture;
-    descriptor.material.uniforms.uNextTexture.value = (nextTarget ?? currentTarget).texture;
-    descriptor.material.uniforms.uCurrentInnerOffset.value.copy(currentSampling.innerOffset);
-    descriptor.material.uniforms.uCurrentInnerScale.value.copy(currentSampling.innerScale);
-    descriptor.material.uniforms.uNextInnerOffset.value.copy(nextSampling.innerOffset);
-    descriptor.material.uniforms.uNextInnerScale.value.copy(nextSampling.innerScale);
-    if (descriptor.material.uniforms.uCurrentStorageUvMin) {
-      descriptor.material.uniforms.uCurrentStorageUvMin.value.copy(currentSampling.storageUvMin);
-      descriptor.material.uniforms.uCurrentStorageUvSize.value.copy(currentSampling.storageUvSize);
-      descriptor.material.uniforms.uNextStorageUvMin.value.copy(nextSampling.storageUvMin);
-      descriptor.material.uniforms.uNextStorageUvSize.value.copy(nextSampling.storageUvSize);
+    uniforms.uCurrentTexture.value = currentTarget.texture;
+    uniforms.uNextTexture.value = (nextTarget ?? currentTarget).texture;
+    (uniforms.uCurrentInnerOffset.value as THREE.Vector2).copy(currentSampling.innerOffset);
+    (uniforms.uCurrentInnerScale.value as THREE.Vector2).copy(currentSampling.innerScale);
+    (uniforms.uNextInnerOffset.value as THREE.Vector2).copy(nextSampling.innerOffset);
+    (uniforms.uNextInnerScale.value as THREE.Vector2).copy(nextSampling.innerScale);
+    if (uniforms.uCurrentStorageUvMin) {
+      (uniforms.uCurrentStorageUvMin.value as THREE.Vector2).copy(currentSampling.storageUvMin);
+      (uniforms.uCurrentStorageUvSize.value as THREE.Vector2).copy(currentSampling.storageUvSize);
+      (uniforms.uNextStorageUvMin.value as THREE.Vector2).copy(nextSampling.storageUvMin);
+      (uniforms.uNextStorageUvSize.value as THREE.Vector2).copy(nextSampling.storageUvSize);
     }
-    descriptor.material.uniforms.uBlend.value = blend;
+    uniforms.uBlend.value = blend;
   }
 
   function syncBlendStats(): void {

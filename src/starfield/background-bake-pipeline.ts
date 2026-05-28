@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   ALLOCATION_STATES,
   FALLBACK_STATES,
@@ -21,7 +21,7 @@ interface BackgroundBakeSkydome {
 }
 
 interface BackgroundBakePipelineArgs {
-  renderer: THREE.WebGLRenderer;
+  renderer: THREE.Renderer;
   bakeCamera: THREE.Camera;
   backgroundScene: THREE.Scene;
   backgroundUniforms: BackgroundUniforms;
@@ -153,7 +153,7 @@ export function createBackgroundBakePipeline({
   function requestBakeQueueProcessing(): void {
     if (bakeQueueFrameRequested) return;
     bakeQueueFrameRequested = true;
-    requestAnimationFrame(processBakeQueueFrame);
+    window.setTimeout(processBakeQueueFrame, 0);
   }
 
   function prepareDescriptorBakeTarget(descriptor: PatchDescriptor): PatchRenderTarget {
@@ -205,7 +205,7 @@ export function createBackgroundBakePipeline({
     const bakeStart = performance.now();
     const previousTarget = renderer.getRenderTarget();
     const previousAutoClear = renderer.autoClear;
-    const previousClearColor = new THREE.Color();
+    const previousClearColor = Object.assign(new THREE.Color(), { a: 1 }) as Parameters<THREE.Renderer["getClearColor"]>[0];
     renderer.getClearColor(previousClearColor);
     const previousClearAlpha = renderer.getClearAlpha();
     let completedThisFrame = 0;

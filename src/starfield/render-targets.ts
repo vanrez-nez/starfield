@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   BASE_TARGET_POOL_BUCKETS,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
@@ -17,13 +17,39 @@ interface RenderTargetOptions {
 type TargetPoolMap = Map<string, PatchRenderTarget[]>;
 type BucketCounts = Record<string, number>;
 
-export function createRenderTargetManager({ renderer }: { renderer: THREE.WebGLRenderer }) {
-  const gl = renderer.getContext();
-  const maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
-  const floatBlendSupported = Boolean(renderer.extensions.get("EXT_float_blend"));
-  const halfFloatAccumulationSupported = renderer.capabilities.isWebGL2
-    ? Boolean(renderer.extensions.get("EXT_color_buffer_float")) && floatBlendSupported
-    : Boolean(renderer.extensions.get("EXT_color_buffer_half_float")) && floatBlendSupported;
+function rendererBackend(renderer: THREE.Renderer): Record<string, unknown> {
+  return (renderer as unknown as { backend?: Record<string, unknown> }).backend ?? {};
+}
+
+function detectMaxTextureSize(renderer: THREE.Renderer): number {
+  const backend = rendererBackend(renderer);
+  const device = backend.device as { limits?: { maxTextureDimension2D?: number } } | undefined;
+  if (typeof device?.limits?.maxTextureDimension2D === "number") {
+    return device.limits.maxTextureDimension2D;
+  }
+
+  const gl = backend.gl as WebGL2RenderingContext | undefined;
+  if (gl) {
+    return Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  }
+
+  return 16384;
+}
+
+function backendExtensionAvailable(renderer: THREE.Renderer, name: string): boolean {
+  const backend = rendererBackend(renderer);
+  const extensions = backend.extensions as { get?: (extensionName: string) => unknown } | undefined;
+  return Boolean(extensions?.get?.(name));
+}
+
+export function createRenderTargetManager({ renderer }: { renderer: THREE.Renderer }) {
+  const backend = rendererBackend(renderer);
+  const maxTextureSize = detectMaxTextureSize(renderer);
+  const webgpuBackend = backend.isWebGPUBackend === true;
+  const webglBackend = backend.isWebGLBackend === true;
+  const floatBlendSupported = webgpuBackend || backendExtensionAvailable(renderer, "EXT_float_blend");
+  const halfFloatAccumulationSupported = webgpuBackend
+    || (webglBackend && backendExtensionAvailable(renderer, "EXT_color_buffer_float") && floatBlendSupported);
   const accumulationType = halfFloatAccumulationSupported ? THREE.HalfFloatType : THREE.UnsignedByteType;
   const targetPoolBuckets = maxTextureSize >= 8192
     ? [...BASE_TARGET_POOL_BUCKETS, 8192]
@@ -40,7 +66,7 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.WebGLR
       wrapS = THREE.ClampToEdgeWrapping,
       wrapT = THREE.ClampToEdgeWrapping,
     } = options;
-    const target = new THREE.WebGLRenderTarget(width, height, {
+    const target = new THREE.RenderTarget(width, height, {
       format: THREE.RGBAFormat,
       type,
       depthBuffer: false,

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   CAMERA_BAKE_IDLE_MS,
   ALLOCATION_STATES,
@@ -32,7 +32,7 @@ interface BakePipelineSkydome {
 }
 
 interface BakePipelineArgs {
-  renderer: THREE.WebGLRenderer;
+  renderer: THREE.Renderer;
   starScene: THREE.Scene;
   bakeCamera: THREE.Camera;
   downsampleScene: THREE.Scene;
@@ -197,7 +197,7 @@ export function createBakePipeline({
     }
 
     bakeQueueFrameRequested = true;
-    requestAnimationFrame(processBakeQueueFrame);
+    window.setTimeout(processBakeQueueFrame, 0);
   }
 
   function ensureSupersampleTargetSize(width: number, height: number): void {
@@ -311,7 +311,7 @@ export function createBakePipeline({
     const bakeStart = performance.now();
     const previousTarget = renderer.getRenderTarget();
     const previousAutoClear = renderer.autoClear;
-    const previousClearColor = new THREE.Color();
+    const previousClearColor = Object.assign(new THREE.Color(), { a: 1 }) as Parameters<THREE.Renderer["getClearColor"]>[0];
     renderer.getClearColor(previousClearColor);
     const previousClearAlpha = renderer.getClearAlpha();
     const jobsThisFrame = MAX_BAKE_JOBS_PER_FRAME;

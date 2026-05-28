@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   BRIGHT_STAR_FRACTION,
   BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,

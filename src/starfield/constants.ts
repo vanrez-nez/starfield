@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import type { CameraInfo, FieldGradient, StarClassStats } from "./types";
 
 export const DOME_RADIUS = 10;
@@ -35,6 +35,7 @@ export const DEFAULT_EFFECT_MAX_SIZE = 0.75;
 export const DEFAULT_SKY_BACKGROUND_RADIUS = DOME_RADIUS;
 export const DEFAULT_BAKED_STAR_RADIUS = DOME_RADIUS;
 export const DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS = DOME_RADIUS * BRIGHT_STAR_OVERLAY_RADIUS_SCALE;
+export const MIN_BACKGROUND_SPHERE_SEGMENTS = 128;
 export const LIGHT_COMPOSITION_MAX_ANCHORS = 8;
 export const DEFAULT_LIGHT_COMPOSITION_BACKGROUND = Object.freeze({
   uSeed: 2.4,

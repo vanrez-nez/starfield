@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   BRIGHT_STAR_OVERLAY_STRENGTH,
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
@@ -18,6 +18,7 @@ import type {
   CatalogStar,
   OverlayUniforms,
   RequestRender,
+  StarfieldMaterial,
   StarfieldStats,
   UniformMap,
 } from "./types";
@@ -32,8 +33,35 @@ interface StarLayerManagerArgs {
 interface RuntimeStarLayer {
   id: string;
   geometry: THREE.InstancedBufferGeometry;
-  material: THREE.ShaderMaterial;
-  mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+  material: StarfieldMaterial;
+  mesh: THREE.Mesh<THREE.InstancedBufferGeometry, StarfieldMaterial>;
+}
+
+const OVERLAY_SHARED_UNIFORM_KEYS = [
+  "uScreenPixelAngle",
+  "uReferenceHeight",
+  "uStarSize",
+  "uSizeVar",
+  "uLargeStarRarity",
+  "uBright",
+  "uBrightVar",
+  "uGlareSize",
+  "uGlareStr",
+  "uGlareVar",
+  "uColorVar",
+  "uWinkleAmount",
+  "uEffectMinSize",
+  "uEffectMaxSize",
+  "uWinkleSharpness",
+  "uWinkleFlashiness",
+];
+
+function syncSharedOverlayUniformNodes(source: OverlayUniforms, converted: UniformMap): void {
+  OVERLAY_SHARED_UNIFORM_KEYS.forEach((key) => {
+    if (converted[key]) {
+      source[key] = converted[key];
+    }
+  });
 }
 
 function createWinkleGeometry(stars: CatalogStar[] = []): THREE.InstancedBufferGeometry {
@@ -121,11 +149,12 @@ export function createStarLayerManager({
   };
   const brightOverlayGeometry = createEmptyOverlayGeometry();
   const brightOverlayMaterial = createOverlayMaterial(brightOverlayUniforms);
+  syncSharedOverlayUniformNodes(overlayUniforms, brightOverlayUniforms);
   const brightOverlay: RuntimeStarLayer = {
     id: "brightOverlay",
     geometry: brightOverlayGeometry,
     material: brightOverlayMaterial,
-    mesh: new THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>(
+    mesh: new THREE.Mesh<THREE.InstancedBufferGeometry, StarfieldMaterial>(
       brightOverlayGeometry,
       brightOverlayMaterial,
     ),
@@ -157,11 +186,12 @@ export function createStarLayerManager({
   };
   const winkleOverlayGeometry = createWinkleGeometry();
   const winkleOverlayMaterial = createWinkleMaterial(winkleUniforms);
+  syncSharedOverlayUniformNodes(overlayUniforms, winkleUniforms);
   const winkleOverlay: RuntimeStarLayer = {
     id: "winkleOverlay",
     geometry: winkleOverlayGeometry,
     material: winkleOverlayMaterial,
-    mesh: new THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>(
+    mesh: new THREE.Mesh<THREE.InstancedBufferGeometry, StarfieldMaterial>(
       winkleOverlayGeometry,
       winkleOverlayMaterial,
     ),

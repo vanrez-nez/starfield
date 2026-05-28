@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import Stats from "three/addons/libs/stats.module.js";
 import "./styles.css";
@@ -19,7 +19,7 @@ function queryRequired<T extends Element>(selector: string): T {
 
 const canvas = queryRequired<HTMLCanvasElement>("#scene");
 const panel = queryRequired<HTMLElement>("#panel");
-const renderer = new THREE.WebGLRenderer({
+const renderer = new THREE.WebGPURenderer({
   canvas,
   antialias: true,
   // powerPreference: "low-power",
@@ -30,6 +30,19 @@ renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.setClearColor(0x05060a, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
+void start();
+
+async function start(): Promise<void> {
+  try {
+    await renderer.init();
+  } catch (error) {
+    const message = document.createElement("div");
+    message.className = "renderer-error";
+    message.textContent = "Unable to initialize Three.js WebGPU/WebGL2 renderer.";
+    document.body.appendChild(message);
+    throw error;
+  }
+
 const stats = new Stats();
 stats.showPanel(0);
 stats.dom.classList.add("starfield-stats-panel");
@@ -38,7 +51,8 @@ document.body.appendChild(stats.dom);
 const scene = new THREE.Scene();
 const drawingBufferSize = new THREE.Vector2();
 const cameraForward = new THREE.Vector3();
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
+timer.connect(document);
 
 function verticalFovForViewport(horizontalFov: number, aspect: number): number {
   const horizontalRadians = THREE.MathUtils.degToRad(horizontalFov);
@@ -127,13 +141,14 @@ function cameraInfo({ screen = false }: { screen?: boolean } = {}): CameraInfo {
 function renderFrame(): void {
   stats.begin();
   applyResizeIfNeeded();
-  const delta = clock.getDelta();
+  timer.update();
+  const delta = timer.getDelta();
   orbitControls.update();
   syncRenderCameraFromOrbit();
   const frameCameraInfo = updateCameraInfoCache();
   gpuStarfield.recordRender({
     delta,
-    elapsedTime: clock.elapsedTime,
+    elapsedTime: timer.getElapsed(),
     cameraInfo: frameCameraInfo,
   });
   starfield.recordRender();
@@ -233,6 +248,7 @@ window.addEventListener("beforeunload", () => {
   cancelAnimationFrame(state.animationFrame);
   uiControls.dispose();
   orbitControls.dispose();
+  timer.dispose();
   gpuStarfield.dispose();
   starfield.dispose();
   stats.dom.remove();
@@ -242,3 +258,4 @@ window.addEventListener("beforeunload", () => {
 applyResizeIfNeeded({ force: true });
 starfield.bakeNow();
 state.animationFrame = requestAnimationFrame(animationLoop);
+}

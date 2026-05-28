@@ -1,4 +1,35 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import {
+  Fn,
+  Discard,
+  abs,
+  attribute,
+  cameraProjectionMatrix,
+  clamp,
+  cross,
+  dot,
+  exp,
+  float,
+  floor,
+  fract,
+  length,
+  max,
+  min,
+  mix,
+  mod,
+  modelViewMatrix,
+  normalize,
+  positionGeometry,
+  pow,
+  select,
+  sin,
+  smoothstep,
+  uniform,
+  varyingProperty,
+  vec2,
+  vec3,
+  vec4,
+} from "three/tsl";
 import type {
   CameraInfo,
   GpuStarfieldApi,
@@ -26,101 +57,6 @@ const DEFAULTS: GpuStarfieldParams = Object.freeze({
   brightness: 0.55,
   colorVariance: 0.55,
 });
-
-const VERTEX_SHADER = /* glsl */ `
-  precision highp float;
-
-  attribute vec3 iBasePosition;
-  attribute vec4 iRandoms;
-
-  varying vec2 vLocal;
-  varying vec4 vRandoms;
-  varying float vDistanceFade;
-
-  uniform vec3 uVirtualPosition;
-  uniform float uFieldRadius;
-  uniform float uDepthFade;
-  uniform float uScreenPixelAngle;
-  uniform float uStarSize;
-
-  vec3 wrapCentered(vec3 value, float span) {
-    return mod(value + span * 0.5, span) - span * 0.5;
-  }
-
-  void main() {
-    float radius = max(uFieldRadius, 0.001);
-    vec3 wrapped = wrapCentered(iBasePosition * radius - uVirtualPosition, radius * 2.0);
-    float distanceToCamera = length(wrapped);
-    float normalizedDistance = distanceToCamera / radius;
-    float edgeStart = mix(0.98, 0.55, clamp(uDepthFade, 0.0, 1.0));
-    float edgeFade = 1.0 - smoothstep(edgeStart, 1.0, normalizedDistance);
-    float nearFade = smoothstep(0.04, 0.12, normalizedDistance);
-    vDistanceFade = edgeFade * nearFade;
-
-    vec3 viewDir = distanceToCamera > 0.0001 ? normalize(-wrapped) : vec3(0.0, 0.0, 1.0);
-    vec3 referenceUp = abs(viewDir.y) > 0.96 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
-    vec3 right = normalize(cross(referenceUp, viewDir));
-    vec3 up = normalize(cross(viewDir, right));
-    float sizeScale = mix(0.35, 1.0, pow(iRandoms.x, 4.0));
-    float supportPixels = uStarSize * sizeScale * 3.4;
-    float supportWorld = max(distanceToCamera * uScreenPixelAngle * supportPixels, 0.0002);
-    vec3 worldPosition = wrapped + (right * position.x + up * position.y) * supportWorld;
-
-    vLocal = position.xy;
-    vRandoms = iRandoms;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPosition, 1.0);
-  }
-`;
-
-const FRAGMENT_SHADER = /* glsl */ `
-  #ifdef GL_FRAGMENT_PRECISION_HIGH
-    precision highp float;
-  #else
-    precision mediump float;
-  #endif
-
-  varying vec2 vLocal;
-  varying vec4 vRandoms;
-  varying float vDistanceFade;
-
-  uniform float uTime;
-  uniform float uBrightness;
-  uniform float uColorVariance;
-
-  vec3 starColor(float t) {
-    vec3 warm = vec3(1.00, 0.70, 0.42);
-    vec3 mid = vec3(0.92, 0.96, 1.00);
-    vec3 cool = vec3(0.62, 0.76, 1.00);
-    return (t < 0.5) ? mix(warm, mid, t * 2.0) : mix(mid, cool, (t - 0.5) * 2.0);
-  }
-
-  float hash11(float p) {
-    return fract(sin(p * 127.1) * 43758.5453123);
-  }
-
-  float noise1(float x) {
-    float i = floor(x);
-    float f = fract(x);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(hash11(i), hash11(i + 1.0), f);
-  }
-
-  void main() {
-    if (vDistanceFade <= 0.0001) discard;
-
-    float radius = length(vLocal);
-    float edge = 1.0 - smoothstep(0.86, 1.0, radius);
-    float core = exp(-radius * radius * 20.0);
-    float glow = exp(-radius * radius * 4.8) * 0.18;
-    float twinkle = mix(0.82, 1.18, noise1(uTime * (0.3 + vRandoms.w * 0.8) + vRandoms.z * 31.0));
-    float brightRank = mix(0.35, 1.0, pow(vRandoms.y, 2.2));
-    vec3 color = starColor(mix(0.5, vRandoms.z, clamp(uColorVariance, 0.0, 1.0)));
-    vec3 radiance = color * (core + glow) * edge * vDistanceFade * brightRank * twinkle * uBrightness;
-
-    if (max(max(radiance.r, radiance.g), radiance.b) < 0.00001) discard;
-    gl_FragColor = vec4(radiance, 1.0);
-  }
-`;
 
 function mixUint32(value: number): number {
   let state = value >>> 0;
@@ -188,6 +124,100 @@ function createGeometry(starCount: number): THREE.InstancedBufferGeometry {
   return geometry;
 }
 
+function createGpuFieldMaterial(uniforms: Record<string, { value: unknown }>): THREE.MeshBasicNodeMaterial {
+  const uVirtualPosition = uniform(uniforms.uVirtualPosition.value as THREE.Vector3);
+  const uFieldRadius = uniform(uniforms.uFieldRadius.value as number);
+  const uDepthFade = uniform(uniforms.uDepthFade.value as number);
+  const uScreenPixelAngle = uniform(uniforms.uScreenPixelAngle.value as number);
+  const uStarSize = uniform(uniforms.uStarSize.value as number);
+  const uBrightness = uniform(uniforms.uBrightness.value as number);
+  const uColorVariance = uniform(uniforms.uColorVariance.value as number);
+  const uTime = uniform(uniforms.uTime.value as number);
+  uniforms.uVirtualPosition = uVirtualPosition;
+  uniforms.uFieldRadius = uFieldRadius;
+  uniforms.uDepthFade = uDepthFade;
+  uniforms.uScreenPixelAngle = uScreenPixelAngle;
+  uniforms.uStarSize = uStarSize;
+  uniforms.uBrightness = uBrightness;
+  uniforms.uColorVariance = uColorVariance;
+  uniforms.uTime = uTime;
+
+  const vLocal = varyingProperty("vec2", "vGpuFieldLocal") as any;
+  const vRandoms = varyingProperty("vec4", "vGpuFieldRandoms") as any;
+  const vDistanceFade = varyingProperty("float", "vGpuFieldDistanceFade") as any;
+
+  const hash11 = (Fn as any)(([p]: any[]) => fract(sin(p.mul(127.1)).mul(43758.5453123)));
+  const noise1 = (Fn as any)(([x]: any[]) => {
+    const i = floor(x);
+    const f = fract(x).toVar();
+    f.assign(f.mul(f).mul(float(3.0).sub(f.mul(2.0))));
+    return mix(hash11(i), hash11(i.add(1.0)), f);
+  });
+  const starColor = (Fn as any)(([t]: any[]) => {
+    const warm = vec3(1.0, 0.7, 0.42);
+    const mid = vec3(0.92, 0.96, 1.0);
+    const cool = vec3(0.62, 0.76, 1.0);
+    return select(
+      t.lessThan(0.5),
+      mix(warm, mid, t.mul(2.0)),
+      mix(mid, cool, t.sub(0.5).mul(2.0)),
+    );
+  });
+
+  const material = new THREE.MeshBasicNodeMaterial({
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
+    depthTest: false,
+    depthWrite: false,
+  });
+
+  material.vertexNode = Fn(() => {
+    const basePosition = attribute("iBasePosition", "vec3") as any;
+    const randoms = attribute("iRandoms", "vec4") as any;
+    const radius = max(uFieldRadius, 0.001);
+    const span = radius.mul(2.0);
+    const wrapped = mod(basePosition.mul(radius).sub(uVirtualPosition).add(span.mul(0.5)), span).sub(span.mul(0.5)).toVar() as any;
+    const distanceToCamera = length(wrapped) as any;
+    const normalizedDistance = distanceToCamera.div(radius);
+    const edgeStart = mix(0.98, 0.55, clamp(uDepthFade, 0.0, 1.0));
+    const edgeFade = smoothstep(edgeStart, 1.0, normalizedDistance).oneMinus();
+    const nearFade = smoothstep(0.04, 0.12, normalizedDistance);
+    vDistanceFade.assign(edgeFade.mul(nearFade));
+
+    const viewDir = wrapped.negate().div(max(distanceToCamera, 0.0001)) as any;
+    const referenceUp = select(abs(viewDir.y).greaterThan(0.96), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)) as any;
+    const right = normalize(cross(referenceUp, viewDir) as any) as any;
+    const up = normalize(cross(viewDir, right) as any) as any;
+    const sizeScale = mix(0.35, 1.0, pow(randoms.x, 4.0));
+    const supportPixels = (uStarSize as any).mul(sizeScale).mul(3.4);
+    const supportWorld = max(distanceToCamera.mul(uScreenPixelAngle).mul(supportPixels), 0.0002);
+    const offset = right.mul(positionGeometry.x).add(up.mul(positionGeometry.y)).mul(supportWorld);
+    const worldPosition = wrapped.add(offset);
+
+    vLocal.assign(positionGeometry.xy);
+    vRandoms.assign(randoms);
+    return cameraProjectionMatrix.mul(modelViewMatrix.mul(vec4(worldPosition, 1.0)));
+  })();
+
+  material.colorNode = Fn(() => {
+    Discard(vDistanceFade.lessThanEqual(0.0001));
+    const radius = length(vLocal);
+    const edge = smoothstep(0.86, 1.0, radius).oneMinus();
+    const core = exp(radius.mul(radius).mul(-20.0));
+    const glow = exp(radius.mul(radius).mul(-4.8)).mul(0.18);
+    const twinkle = mix(0.82, 1.18, noise1(uTime.mul(vRandoms.w.mul(0.8).add(0.3)).add(vRandoms.z.mul(31.0))));
+    const brightRank = mix(0.35, 1.0, pow(vRandoms.y, 2.2));
+    const color = starColor(mix(0.5, vRandoms.z, clamp(uColorVariance, 0.0, 1.0)));
+    const radiance = color.mul(core.add(glow)).mul(edge).mul(vDistanceFade).mul(brightRank).mul(twinkle).mul(uBrightness);
+    const peak = max(max(radiance.r, radiance.g), radiance.b);
+    Discard(peak.lessThan(0.00001));
+    return vec4(radiance, 1.0);
+  })();
+
+  return material;
+}
+
 export function createGpuStarfield({
   scene,
   requestRender = () => {},
@@ -200,7 +230,7 @@ export function createGpuStarfield({
   let cameraForward = new THREE.Vector3(0, 0, -1);
   let geometryRebuilds = 0;
 
-  const uniforms = {
+  const uniforms: Record<string, { value: unknown }> = {
     uVirtualPosition: { value: virtualPosition },
     uFieldRadius: { value: params.fieldRadius },
     uDepthFade: { value: params.depthFade },
@@ -212,16 +242,7 @@ export function createGpuStarfield({
   };
 
   let geometry = createGeometry(params.starCount);
-  const material = new THREE.ShaderMaterial({
-    uniforms,
-    vertexShader: VERTEX_SHADER,
-    fragmentShader: FRAGMENT_SHADER,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    side: THREE.FrontSide,
-    depthTest: false,
-    depthWrite: false,
-  });
+  const material = createGpuFieldMaterial(uniforms);
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
@@ -266,7 +287,7 @@ export function createGpuStarfield({
     params[numericKey] = nextValue;
     if (key === "fieldRadius") {
       uniforms.uFieldRadius.value = Math.max(0.001, nextValue);
-      const span = uniforms.uFieldRadius.value * 2;
+      const span = Number(uniforms.uFieldRadius.value) * 2;
       virtualPosition.set(
         wrapPositive(virtualPosition.x, span),
         wrapPositive(virtualPosition.y, span),

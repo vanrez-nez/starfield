@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import {
   DENSITY_FALLBACK_STARS_PER_PIXEL,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
@@ -41,6 +41,7 @@ import type {
   PatchDescriptor,
   PatchLayout,
   QueueState,
+  RendererInfoLike,
   StarfieldStats,
 } from "./types";
 
@@ -625,7 +626,7 @@ export function patchDescriptorSummary(ctx: StatsContext, { includeDebug = false
 
 export function collectStatsPayload(
   ctx: StatsContext,
-  rendererInfo: THREE.WebGLInfo,
+  rendererInfo: RendererInfoLike,
   cameraInfo: Partial<CameraInfo> = {},
   { detail = "panel" }: { detail?: "panel" | "debug" } = {},
 ): StarfieldStats {
@@ -654,15 +655,16 @@ export function collectStatsPayload(
   const storageSize = maxDescriptorStorageSize(patchDescriptors);
   const assignedSize = maxDescriptorAssignedSize(patchDescriptors);
   const precisionSize = maxDescriptorPrecisionSize(patchDescriptors, currentSupersample);
+  const rendererFrame = rendererInfo.render.frame ?? rendererInfo.frame ?? 0;
   const result: StarfieldStats = {
     ...stats,
     ...demand,
     ...memory,
     ...descriptors,
     ...capReadouts,
-    frame: rendererInfo.render.frame,
+    frame: rendererFrame,
     drawCalls: rendererInfo.render.calls,
-    callFrames: `${rendererInfo.render.calls}/${rendererInfo.render.frame}`,
+    callFrames: `${rendererInfo.render.calls}/${rendererFrame}`,
     polygons: rendererInfo.render.triangles,
     triangles: rendererInfo.render.triangles,
     points: rendererInfo.render.points,
