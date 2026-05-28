@@ -16,10 +16,12 @@ export function createSkydomeManager({
   targetManager,
   fallbackPatchTarget,
   getSphereSegments,
+  initialRadius = DOME_RADIUS,
   onBlendStatsChange = () => {},
 }) {
   const bakedDomeGroup = new THREE.Group();
   const activePatchBlends = new Set();
+  let domeRadius = Number.isFinite(initialRadius) ? initialRadius : DOME_RADIUS;
   scene.add(bakedDomeGroup);
 
   function createDomeGeometry(descriptor) {
@@ -33,7 +35,7 @@ export function createSkydomeManager({
     const thetaLength = descriptor.uvSize.y * Math.PI;
 
     return new THREE.SphereGeometry(
-      DOME_RADIUS,
+      domeRadius,
       horizontalSegments,
       verticalSegments,
       phiStart,
@@ -193,6 +195,19 @@ export function createSkydomeManager({
     });
   }
 
+  function setVisible(visible) {
+    bakedDomeGroup.visible = Boolean(visible);
+    requestRender();
+  }
+
+  function setRadius(value, descriptors = []) {
+    const nextRadius = Number(value);
+    if (!Number.isFinite(nextRadius) || nextRadius <= 0) return;
+    domeRadius = nextRadius;
+    rebuildBakedDomeMeshes(descriptors);
+    requestRender();
+  }
+
   function clearBlendForDescriptor(descriptor) {
     activePatchBlends.delete(descriptor);
     descriptor.blendActive = false;
@@ -249,12 +264,20 @@ export function createSkydomeManager({
     startDescriptorBlend,
     promoteDescriptorBakeTarget,
     clearBlendForDescriptor,
+    setVisible,
+    setRadius,
     rebuildBakedDomeMeshes,
     disposeBakedDomeMeshes,
     advancePatchBlends,
     dispose,
     get activeBlendCount() {
       return activePatchBlends.size;
+    },
+    get visible() {
+      return bakedDomeGroup.visible;
+    },
+    get radius() {
+      return domeRadius;
     },
   };
 }

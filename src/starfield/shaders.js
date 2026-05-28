@@ -413,7 +413,26 @@ const DOWNSAMPLE_FRAGMENT_SHADER = /* glsl */ `
 
     vec3 stars = color.rgb / max(count, 1.0);
     vec3 background = vec3(0.004, 0.005, 0.011);
-    vec3 mapped = 1.0 - exp(-(background + stars) * uExposure);
+    vec3 backgroundMapped = 1.0 - exp(-background * uExposure);
+    vec3 combinedMapped = 1.0 - exp(-(background + stars) * uExposure);
+    vec3 starContribution = max(combinedMapped - backgroundMapped, vec3(0.0));
+    float alpha = clamp(max(max(starContribution.r, starContribution.g), starContribution.b), 0.0, 1.0);
+    gl_FragColor = vec4(starContribution, alpha);
+  }
+`;
+
+const SKY_BACKGROUND_VERTEX_SHADER = /* glsl */ `
+  void main() {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SKY_BACKGROUND_FRAGMENT_SHADER = /* glsl */ `
+  precision highp float;
+
+  void main() {
+    vec3 background = vec3(0.004, 0.005, 0.011);
+    vec3 mapped = 1.0 - exp(-background);
     gl_FragColor = vec4(mapped, 1.0);
   }
 `;
@@ -502,6 +521,16 @@ export function createDownsampleMaterial(uniforms) {
   });
 }
 
+export function createSkyBackgroundMaterial() {
+  return new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: false,
+    vertexShader: SKY_BACKGROUND_VERTEX_SHADER,
+    fragmentShader: SKY_BACKGROUND_FRAGMENT_SHADER,
+  });
+}
+
 export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
@@ -521,6 +550,14 @@ export function createPatchDomeMaterial({ descriptor, visibleTarget }) {
       uNextInnerScale: { value: sampling.innerScale.clone() },
     },
     side: THREE.BackSide,
+    transparent: true,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+    blendEquationAlpha: THREE.AddEquation,
+    blendSrcAlpha: THREE.OneFactor,
+    blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
     depthWrite: false,
     depthTest: false,
     vertexShader: PATCH_DOME_VERTEX_SHADER,

@@ -212,7 +212,7 @@ export function createRenderTargetManager({ renderer }) {
 
   function createFallbackPatchTexture() {
     const texture = new THREE.DataTexture(
-      new Uint8Array([1, 1, 3, 255]),
+      new Uint8Array([0, 0, 0, 0]),
       1,
       1,
       THREE.RGBAFormat,

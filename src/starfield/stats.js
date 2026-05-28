@@ -79,6 +79,23 @@ export function createInitialStats({
     internalHeight: defaultPatchLayout.storageHeight * supersample,
     sphereSegments: currentSphereSegments,
     sphereVerticalSegments: sphereVerticalSegmentsFor(currentSphereSegments),
+    backgroundLayerEnabled: true,
+    backgroundLayerDrawCalls: 1,
+    backgroundLayerTriangles: 0,
+    backgroundLayerRadius: defaults.skyBackgroundRadius,
+    bakedStarLayerEnabled: true,
+    bakedStarLayerDrawCalls: defaultPatchLayout.patchCount,
+    bakedStarLayerRadius: defaults.bakedStarsRadius,
+    bakedStarLayerDensity: defaults.uDensity,
+    bakedStarLayerSparsity: defaults.uSparsity,
+    bakedStarLayerSeed: defaults.uSeed,
+    bakedStarLayerStarCount: 0,
+    overlayRadius: defaults.brightOverlayRadius,
+    overlayLayerDensity: defaults.uDensity,
+    overlayLayerSparsity: defaults.uSparsity,
+    overlayLayerSeed: defaults.uSeed,
+    overlayLayerStarCount: 0,
+    overlayCatalogDirty: true,
     lastBakeMs: 0,
     allocationCount: 0,
     activeBakeJobs: 0,
@@ -111,7 +128,9 @@ export function computeDemandReadouts(ctx) {
     currentCameraInfo,
     currentPatchLayout,
     bakeUniforms,
+    overlayUniforms = bakeUniforms,
     catalogDirty,
+    overlayCatalogDirty = catalogDirty,
     stats,
     activeSparseMode,
   } = ctx;
@@ -146,7 +165,11 @@ export function computeDemandReadouts(ctx) {
   const currentPatchSize = Math.max(currentPatchLayout.contentWidth, currentPatchLayout.contentHeight);
   const oversampleRatio = currentPatchLayout.qualityScale ?? currentPatchSize / requiredPatchTexelsMax;
   const totalStarCount = catalogStarCount(bakeUniforms);
-  const totalOverlayCandidateCount = overlayCandidateStarCount({ bakeUniforms, catalogDirty, stats });
+  const totalOverlayCandidateCount = overlayCandidateStarCount({
+    bakeUniforms: overlayUniforms,
+    catalogDirty: overlayCatalogDirty,
+    stats,
+  });
   const estimatedStarsPerPatch = totalStarCount / patchCount;
   const estimatedOverlayCandidatesPerPatch = totalOverlayCandidateCount / patchCount;
   const starsPerProjectedPixel = estimatedStarsPerPatch / projectedPatchPixels;
@@ -688,6 +711,7 @@ export function collectStatsPayload(ctx, rendererInfo, cameraInfo = {}, { detail
     autoPatchGrid: patchGridLabel(currentPatchLayout),
     autoLayoutReason: currentPatchLayout.autoLayoutReason ?? stats.autoLayoutReason ?? "automatic",
     catalogDirty: ctx.catalogDirty,
+    overlayCatalogDirty: ctx.overlayCatalogDirty,
     patchGrid: patchGridLabel(currentPatchLayout),
     patchCount: patchDescriptors.length,
     patchSize: sizeLabel(assignedSize.width, assignedSize.height),

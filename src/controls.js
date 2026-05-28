@@ -1,21 +1,56 @@
 const PARAMS = [
   { group: "Display" },
   { key: "sphereSegments", label: "Sphere Segments", min: 16, max: 256, step: 16, format: (v) => v.toFixed(0), kind: "display" },
-  { group: "Field" },
-  { key: "uDensity", label: "Density", min: 10, max: 360, step: 1, format: (v) => v.toFixed(0) },
-  { key: "uSparsity", label: "Sparsity", min: 0, max: 0.97, step: 0.005, format: (v) => v.toFixed(3) },
-  { group: "Core" },
-  { key: "uStarSize", label: "Star Size", min: 0.1, max: 4, step: 0.05, format: (v) => v.toFixed(2) },
-  { key: "uSizeVar", label: "Size Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
-  { key: "uLargeStarRarity", label: "Large Star Rarity", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
-  { key: "uBright", label: "Brightness", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2) },
-  { key: "uBrightVar", label: "Brightness Var", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
-  { group: "Glare" },
-  { key: "uGlareSize", label: "Glare Size", min: 0, max: 8, step: 0.1, format: (v) => v.toFixed(1) },
-  { key: "uGlareStr", label: "Glare Strength", min: 0, max: 2, step: 0.05, format: (v) => v.toFixed(2) },
-  { key: "uGlareVar", label: "Glare Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
-  { group: "Color" },
-  { key: "uColorVar", label: "Color Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2) },
+  { group: "Layers" },
+  { kind: "layerTabs" },
+];
+
+const STAR_LAYER_CONTROLS = [
+  { type: "group", label: "Field" },
+  { type: "range", key: "uDensity", label: "Density", min: 10, max: 360, step: 1, format: (v) => v.toFixed(0), param: true },
+  { type: "range", key: "uSparsity", label: "Sparsity", min: 0, max: 0.97, step: 0.005, format: (v) => v.toFixed(3), param: true },
+  { type: "range", key: "uSeed", label: "Seed", min: 0, max: 1000, step: 1, format: (v) => v.toFixed(0), param: true },
+  { type: "group", label: "Core" },
+  { type: "range", key: "uStarSize", label: "Star Size", min: 0.1, max: 4, step: 0.05, format: (v) => v.toFixed(2), param: true },
+  { type: "range", key: "uSizeVar", label: "Size Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+  { type: "range", key: "uLargeStarRarity", label: "Large Star Rarity", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+  { type: "range", key: "uBright", label: "Brightness", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2), param: true },
+  { type: "range", key: "uBrightVar", label: "Brightness Var", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+  { type: "group", label: "Glare" },
+  { type: "range", key: "uGlareSize", label: "Glare Size", min: 0, max: 8, step: 0.1, format: (v) => v.toFixed(1), param: true },
+  { type: "range", key: "uGlareStr", label: "Glare Strength", min: 0, max: 2, step: 0.05, format: (v) => v.toFixed(2), param: true },
+  { type: "range", key: "uGlareVar", label: "Glare Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+  { type: "group", label: "Color" },
+  { type: "range", key: "uColorVar", label: "Color Variance", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
+];
+
+const LAYER_TABS = [
+  {
+    id: "skyBackground",
+    label: "Background",
+    controls: [
+      { type: "toggle", key: "skyBackgroundEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "range", key: "skyBackgroundRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
+    ],
+  },
+  {
+    id: "bakedStars",
+    label: "Baked",
+    controls: [
+      { type: "toggle", key: "bakedStarsEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "range", key: "bakedStarsRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
+      ...STAR_LAYER_CONTROLS,
+    ],
+  },
+  {
+    id: "brightOverlay",
+    label: "Overlay",
+    controls: [
+      { type: "toggle", key: "brightOverlayEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "range", key: "brightOverlayRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
+      ...STAR_LAYER_CONTROLS,
+    ],
+  },
 ];
 
 const STATS_PANEL_REFRESH_MS = 250;
@@ -59,6 +94,26 @@ function formatGpuStatsForPanel(stats) {
     `Programs: ${stats.shaderPrograms}`,
     `Sphere: ${stats.sphereSegments}x${stats.sphereVerticalSegments}`,
     "",
+    "Layers",
+    `Sky Background: ${stats.backgroundLayerEnabled ? "on" : "off"}`,
+    `Background Radius: ${formatNumber(stats.backgroundLayerRadius, 2)}`,
+    `Background Draws: ${formatInteger(stats.backgroundLayerDrawCalls)}`,
+    `Background Tris: ${formatInteger(stats.backgroundLayerTriangles)}`,
+    `Baked Stars: ${stats.bakedStarLayerEnabled ? "on" : "off"}`,
+    `Baked Radius: ${formatNumber(stats.bakedStarLayerRadius, 2)}`,
+    `Baked Density: ${formatInteger(stats.bakedStarLayerDensity)}`,
+    `Baked Sparsity: ${formatNumber(stats.bakedStarLayerSparsity, 3)}`,
+    `Baked Seed: ${formatNumber(stats.bakedStarLayerSeed, 0)}`,
+    `Baked Count: ${formatInteger(stats.bakedStarLayerStarCount)}`,
+    `Baked Draws: ${formatInteger(stats.bakedStarLayerDrawCalls)}`,
+    `Bright Overlay: ${stats.overlayEnabled ? "on" : "off"}`,
+    `Overlay Radius: ${formatNumber(stats.overlayRadius, 2)}`,
+    `Overlay Density: ${formatInteger(stats.overlayLayerDensity)}`,
+    `Overlay Sparsity: ${formatNumber(stats.overlayLayerSparsity, 3)}`,
+    `Overlay Seed: ${formatNumber(stats.overlayLayerSeed, 0)}`,
+    `Overlay Count: ${formatInteger(stats.overlayLayerStarCount)}`,
+    `Overlay Draws: ${formatInteger(stats.overlayDrawCalls)}`,
+    "",
     "Bake",
     `Auto Virtual: ${formatSizeWithOptimal(stats.autoVirtualSize ?? stats.virtualSize, stats.optimalVirtualSize, stats.autoVirtualSizeCapped)}`,
     `Ideal Virtual: ${stats.idealVirtualSize ?? stats.optimalVirtualSize ?? "0x0"}`,
@@ -80,7 +135,8 @@ function formatGpuStatsForPanel(stats) {
     `Next Targets: ${stats.nextTargetPatchCount ?? 0}`,
     `Layer Dirty: ${stats.layerDirtyPatchCount ?? 0}`,
     `Pending Layers: ${stats.pendingLayerPatchCount ?? 0}`,
-    `Catalog Dirty: ${stats.catalogDirty ? "yes" : "no"}`,
+    `Baked Catalog Dirty: ${stats.catalogDirty ? "yes" : "no"}`,
+    `Overlay Catalog Dirty: ${stats.overlayCatalogDirty ? "yes" : "no"}`,
     `Layout Pending: ${stats.pendingAutoLayout ? "yes" : "no"}`,
     `Downgraded: ${stats.downgradedPatchCount ?? 0}`,
     `States: ${stats.patchStateSummary ?? "none"}`,
@@ -144,6 +200,9 @@ function formatGpuStatsForPanel(stats) {
     `Overlay Instances: ${formatInteger(stats.overlayStarInstances)}`,
     `Overlay Tris: ${formatInteger(stats.overlayTriangleCount)}`,
     `Overlay Draws: ${formatInteger(stats.overlayDrawCalls)}`,
+    `Background Layer: ${stats.backgroundLayerEnabled ? "yes" : "no"}`,
+    `Background Draws: ${formatInteger(stats.backgroundLayerDrawCalls)}`,
+    `Background Tris: ${formatInteger(stats.backgroundLayerTriangles)}`,
     `Tile Aware: ${stats.tileAwareGeneration ? "yes" : "no"}`,
     `Query Grid: ${stats.starQueryGrid ?? "0x0"}`,
     `Last Query Patch: ${stats.lastStarQueryPatchId ?? "none"}`,
@@ -192,6 +251,9 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   let statsRefreshTimer = 0;
   let lastStatsRefreshAt = 0;
   const collapsedStatsGroups = new Set();
+  const layerToggleInputs = new Map();
+  const layerParamInputs = new Map();
+  let activeLayerId = "bakedStars";
 
   function isUxVisible() {
     return uxVisible;
@@ -260,10 +322,32 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     buttons.overlay.setAttribute("aria-pressed", enabled ? "true" : "false");
   }
 
+  function syncLayerToggle(layer) {
+    const control = layerToggleInputs.get(layer);
+    if (!control) return;
+    const enabled = starfield.getLayerEnabled(layer);
+    control.input.checked = enabled;
+    control.value.textContent = control.format(enabled);
+  }
+
+  function syncLayerParam(layer, key) {
+    const control = layerParamInputs.get(`${layer}:${key}`);
+    if (!control) return;
+    const nextValue = starfield.getLayerParam(layer, key);
+    control.input.value = String(nextValue);
+    control.value.textContent = control.format(nextValue);
+    updateSliderFill(control.input, control.min, control.max);
+  }
+
+  function syncSeedButtonState() {
+    buttons.seed.disabled = activeLayerId === "skyBackground";
+  }
+
   function toggleOverlay() {
-    const nextEnabled = !starfield.getBrightStarOverlayEnabled();
-    starfield.setBrightStarOverlayEnabled(nextEnabled);
-    setOverlayButtonState(starfield.getBrightStarOverlayEnabled());
+    const nextEnabled = !starfield.getLayerEnabled("brightOverlay");
+    starfield.setLayerEnabled("brightOverlay", nextEnabled);
+    setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
+    syncLayerToggle("brightOverlay");
     refreshVisibleStatsPanel({ force: true });
   }
 
@@ -303,6 +387,11 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
         starfield.setSphereSegments(nextValue);
         return;
       }
+      if (param.kind === "layerRadius") {
+        starfield.setLayerRadius(param.layer, nextValue);
+        refreshVisibleStatsPanel();
+        return;
+      }
       if (param.kind === "adaptive") {
         starfield.setAdaptiveParam(param.key, nextValue);
         return;
@@ -338,6 +427,10 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     input.checked = Boolean(starfield.defaults[param.key]);
     label.htmlFor = input.id;
 
+    if (param.kind === "layerToggle") {
+      layerToggleInputs.set(param.layer, { input, value, format: param.format });
+    }
+
     const track = document.createElement("span");
     track.className = "switch-track";
 
@@ -347,6 +440,14 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
 
     input.addEventListener("change", () => {
       paint(input.checked);
+      if (param.kind === "layerToggle") {
+        starfield.setLayerEnabled(param.layer, input.checked);
+        if (param.layer === "brightOverlay") {
+          setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
+        }
+        refreshVisibleStatsPanel({ force: true });
+        return;
+      }
       starfield.setAdaptiveParam(param.key, input.checked);
     });
     switchControl.addEventListener("click", (event) => {
@@ -402,6 +503,183 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
     paint(select.value);
   }
 
+  function addLayerToggleRow(parent, layer, control) {
+    const row = document.createElement("div");
+    row.className = "row row--toggle";
+
+    const top = document.createElement("div");
+    top.className = "top";
+
+    const label = document.createElement("label");
+    label.textContent = control.label;
+
+    const value = document.createElement("span");
+    value.className = "val";
+
+    const switchControl = document.createElement("div");
+    switchControl.className = "switch";
+
+    const input = document.createElement("input");
+    input.id = `control-${layer}-${control.key}`;
+    input.type = "checkbox";
+    input.checked = Boolean(starfield.defaults[control.key]);
+    label.htmlFor = input.id;
+    layerToggleInputs.set(layer, { input, value, format: control.format });
+
+    const track = document.createElement("span");
+    track.className = "switch-track";
+
+    function paint(nextValue) {
+      value.textContent = control.format(nextValue);
+    }
+
+    input.addEventListener("change", () => {
+      paint(input.checked);
+      starfield.setLayerEnabled(layer, input.checked);
+      if (layer === "brightOverlay") {
+        setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
+      }
+      refreshVisibleStatsPanel({ force: true });
+    });
+    switchControl.addEventListener("click", (event) => {
+      if (event.target === input) return;
+      input.checked = !input.checked;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    top.append(label, value);
+    switchControl.append(input, track);
+    row.append(top, switchControl);
+    parent.append(row);
+    paint(input.checked);
+  }
+
+  function addLayerRangeRow(parent, layer, control) {
+    const row = document.createElement("div");
+    row.className = "row";
+
+    const top = document.createElement("div");
+    top.className = "top";
+
+    const label = document.createElement("label");
+    label.textContent = control.label;
+
+    const value = document.createElement("span");
+    value.className = "val";
+
+    const input = document.createElement("input");
+    input.id = `control-${layer}-${control.key}`;
+    input.type = "range";
+    input.min = String(control.min);
+    input.max = String(control.max);
+    input.step = String(control.step);
+    input.value = String(control.param ? starfield.getLayerParam(layer, control.key) : starfield.defaults[control.key]);
+    label.htmlFor = input.id;
+    if (control.param) {
+      layerParamInputs.set(`${layer}:${control.key}`, {
+        input,
+        value,
+        format: control.format,
+        min: control.min,
+        max: control.max,
+      });
+    }
+
+    function paint(nextValue) {
+      value.textContent = control.format(nextValue);
+      updateSliderFill(input, control.min, control.max);
+    }
+
+    input.addEventListener("input", () => {
+      const nextValue = Number(input.value);
+      paint(nextValue);
+      if (control.param) {
+        starfield.setLayerParam(layer, control.key, nextValue, 180);
+        refreshVisibleStatsPanel();
+        return;
+      }
+      starfield.setLayerRadius(layer, nextValue);
+      refreshVisibleStatsPanel();
+    });
+
+    top.append(label, value);
+    row.append(top, input);
+    parent.append(row);
+    paint(Number(input.value));
+  }
+
+  function addLayerTabs() {
+    const row = document.createElement("div");
+    row.className = "row row--layer-tabs";
+
+    const tablist = document.createElement("div");
+    tablist.className = "layer-tabs";
+    tablist.setAttribute("role", "tablist");
+    tablist.setAttribute("aria-label", "Starfield layers");
+
+    const panels = document.createElement("div");
+    panels.className = "layer-tab-panels";
+
+    function activate(layerId) {
+      activeLayerId = layerId;
+      [...tablist.children].forEach((tab) => {
+        const selected = tab.dataset.layer === layerId;
+        tab.classList.toggle("is-active", selected);
+        tab.setAttribute("aria-selected", selected ? "true" : "false");
+        tab.tabIndex = selected ? 0 : -1;
+      });
+
+      [...panels.children].forEach((panel) => {
+        panel.hidden = panel.dataset.layer !== layerId;
+      });
+      syncSeedButtonState();
+    }
+
+    LAYER_TABS.forEach((layer, index) => {
+      const selected = layer.id === activeLayerId;
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "layer-tab";
+      tab.textContent = layer.label;
+      tab.dataset.layer = layer.id;
+      tab.id = `layer-tab-${layer.id}`;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", `layer-panel-${layer.id}`);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+      tab.tabIndex = selected ? 0 : -1;
+      tab.addEventListener("click", () => activate(layer.id));
+
+      const panel = document.createElement("div");
+      panel.className = "layer-tab-panel";
+      panel.dataset.layer = layer.id;
+      panel.id = `layer-panel-${layer.id}`;
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", tab.id);
+      panel.hidden = !selected;
+
+      layer.controls.forEach((control) => {
+        if (control.type === "group") {
+          const group = document.createElement("div");
+          group.className = "group group--layer";
+          group.textContent = control.label;
+          panel.append(group);
+          return;
+        }
+        if (control.type === "toggle") {
+          addLayerToggleRow(panel, layer.id, control);
+          return;
+        }
+        addLayerRangeRow(panel, layer.id, control);
+      });
+
+      tablist.append(tab);
+      panels.append(panel);
+    });
+
+    row.append(tablist, panels);
+    rows.append(row);
+  }
+
   function buildPanel() {
     PARAMS.forEach((param) => {
       if (param.group) {
@@ -412,7 +690,12 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
         return;
       }
 
-      if (param.kind === "adaptiveToggle") {
+      if (param.kind === "layerTabs") {
+        addLayerTabs();
+        return;
+      }
+
+      if (param.kind === "adaptiveToggle" || param.kind === "layerToggle") {
         addToggleRow(param);
         return;
       }
@@ -517,14 +800,21 @@ export function createControls({ rows, buttons, starfield, getStats, onRecenter 
   starfield.setBakeStatusHandler(setBakeStatus);
   starfield.setReadoutsChangeHandler(refreshReadouts);
   buttons.bake.addEventListener("click", () => starfield.bakeNow());
-  buttons.seed.addEventListener("click", () => starfield.reseed());
+  buttons.seed.addEventListener("click", () => {
+    if (activeLayerId === "skyBackground") return;
+    starfield.reseedLayer(activeLayerId);
+    syncLayerParam(activeLayerId, "uSeed");
+    refreshVisibleStatsPanel({ force: true });
+  });
   buttons.recenter.addEventListener("click", onRecenter);
   buttons.overlay?.addEventListener("click", toggleOverlay);
   document.addEventListener("keydown", handleUxHotkey, true);
   window.printStarfieldGpuStats = printGpuStats;
 
   buildPanel();
-  setOverlayButtonState(starfield.getBrightStarOverlayEnabled());
+  ["skyBackground", "bakedStars", "brightOverlay"].forEach(syncLayerToggle);
+  setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
+  syncSeedButtonState();
 
   return {
     refreshReadouts,

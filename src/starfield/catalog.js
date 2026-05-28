@@ -275,16 +275,6 @@ export function createCatalogOverlayAndStats({ bakeUniforms, brightStarOverlayEn
   };
 }
 
-export function syncOverlayStats({ overlayGeometry, overlayMesh, stats, brightStarOverlayEnabled }) {
-  const overlayCount = overlayGeometry.instanceCount ?? 0;
-  overlayMesh.visible = brightStarOverlayEnabled && overlayCount > 0;
-  stats.overlayEnabled = brightStarOverlayEnabled;
-  stats.overlayStarCount = overlayCount;
-  stats.overlayStarInstances = overlayCount;
-  stats.overlayTriangleCount = overlayCount * 2;
-  stats.overlayDrawCalls = overlayMesh.visible ? 1 : 0;
-}
-
 export function catalogClassStatsSummary(stats) {
   return {
     starCount: stats.starClassTotal,
