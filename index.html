@@ -8,26 +8,7 @@
   <body>
     <main id="app">
       <canvas id="scene" aria-label="Shader starfield skydome"></canvas>
-
-      <section id="panel" aria-label="Starfield controls">
-        <header>
-          <div class="title">
-            <span class="dot"></span>
-            <h1>Starfield <span>// skydome</span></h1>
-          </div>
-          <button id="rebake" class="icon-button" type="button">Bake</button>
-        </header>
-
-        <div class="rows" id="rows"></div>
-
-        <div class="actions">
-          <button class="btn" id="seedBtn" type="button">Reseed</button>
-          <button class="btn" id="recenterBtn" type="button">Recenter</button>
-          <button class="btn btn--wide" id="toggleOverlayBtn" type="button" aria-pressed="false">Toggle Overlay</button>
-        </div>
-      </section>
-
-      <div id="hint"><b>Drag</b> to look around</div>
+      <section id="pane-host" aria-label="Starfield controls"></section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

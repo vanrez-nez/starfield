@@ -1,6 +1,5 @@
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import Stats from "three/addons/libs/stats.module.js";
 import "./styles.css";
 import { createControls } from "./controls";
 import { createGpuStarfield } from "./gpu-starfield";
@@ -18,7 +17,7 @@ function queryRequired<T extends Element>(selector: string): T {
 }
 
 const canvas = queryRequired<HTMLCanvasElement>("#scene");
-const panel = queryRequired<HTMLElement>("#panel");
+const paneHost = queryRequired<HTMLElement>("#pane-host");
 const renderer = new THREE.WebGPURenderer({
   canvas,
   antialias: true,
@@ -42,11 +41,6 @@ async function start(): Promise<void> {
     document.body.appendChild(message);
     throw error;
   }
-
-const stats = new Stats();
-stats.showPanel(0);
-stats.dom.classList.add("starfield-stats-panel");
-document.body.appendChild(stats.dom);
 
 const scene = new THREE.Scene();
 const drawingBufferSize = new THREE.Vector2();
@@ -75,6 +69,7 @@ const state = {
 
 let starfield: ReturnType<typeof createStarfield>;
 let gpuStarfield: ReturnType<typeof createGpuStarfield>;
+let uiControls: ReturnType<typeof createControls>;
 
 const cachedCameraInfo: CameraInfo = {
   horizontalFov: HORIZONTAL_FOV,
@@ -103,7 +98,7 @@ orbitControls.rotateSpeed = 0.45;
 orbitControls.saveState();
 
 ["pointerdown", "pointermove", "pointerup", "pointercancel", "wheel"].forEach((eventName) => {
-  panel?.addEventListener(eventName, (event) => {
+  paneHost.addEventListener(eventName, (event) => {
     event.stopPropagation();
   }, { passive: true });
 });
@@ -139,7 +134,6 @@ function cameraInfo({ screen = false }: { screen?: boolean } = {}): CameraInfo {
 }
 
 function renderFrame(): void {
-  stats.begin();
   applyResizeIfNeeded();
   timer.update();
   const delta = timer.getDelta();
@@ -153,7 +147,7 @@ function renderFrame(): void {
   });
   starfield.recordRender();
   renderer.render(scene, camera);
-  stats.end();
+  uiControls.updateFps(delta);
 }
 
 function animationLoop(): void {
@@ -185,14 +179,8 @@ function recenter(): void {
   requestRuntimeRender();
 }
 
-const uiControls = createControls({
-  rows: queryRequired<HTMLElement>("#rows"),
-  buttons: {
-    bake: queryRequired<HTMLButtonElement>("#rebake"),
-    seed: queryRequired<HTMLButtonElement>("#seedBtn"),
-    recenter: queryRequired<HTMLButtonElement>("#recenterBtn"),
-    overlay: document.querySelector<HTMLButtonElement>("#toggleOverlayBtn"),
-  },
+uiControls = createControls({
+  container: paneHost,
   starfield,
   gpuStarfield,
   getStats(options: { detail?: "panel" | "debug" } = {}): StarfieldStats {
@@ -251,7 +239,6 @@ window.addEventListener("beforeunload", () => {
   timer.dispose();
   gpuStarfield.dispose();
   starfield.dispose();
-  stats.dom.remove();
   renderer.dispose();
 });
 

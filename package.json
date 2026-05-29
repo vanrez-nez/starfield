@@ -10,11 +10,13 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "devDependencies": {
+    "@tweakpane/core": "^2.0.5",
     "@types/three": "^0.184.0",
     "typescript": "^6.0.3",
     "vite": "^5.3.1"
   },
   "dependencies": {
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "tweakpane": "^4.0.5"
   }
 }

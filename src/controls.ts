@@ -1,23 +1,20 @@
+import { Pane, type ButtonApi, type FolderApi, type TabPageApi } from "tweakpane";
 import { STARFIELD_CONFIG } from "./config";
 import type { GpuStarfieldApi, GpuStarfieldParams, StarfieldStats } from "./starfield/types";
 
 const GPU_FIELD_LAYER_ID = STARFIELD_CONFIG.gpuField.id;
 
 type ControlValue = number | boolean;
+type PaneValue = number | boolean | string;
+type PaneState = Record<string, PaneValue>;
 type RangeFormatFn = (value: number) => string;
-type ToggleFormatFn = (value: boolean) => string;
 type ControlLayerId = "skyBackground" | "bakedStars" | "brightOverlay" | typeof GPU_FIELD_LAYER_ID;
 type StarfieldControlLayerId = Exclude<ControlLayerId, typeof GPU_FIELD_LAYER_ID>;
+type PaneContainer = FolderApi | TabPageApi;
 
-interface PanelGroupParam {
-  group: string;
+interface RefreshableBinding {
+  refresh(): void;
 }
-
-interface LayerTabsParam {
-  kind: "layerTabs";
-}
-
-type PanelParam = PanelGroupParam | LayerTabsParam;
 
 interface LayerGroupControl {
   type: "group";
@@ -28,7 +25,6 @@ interface LayerToggleControl {
   type: "toggle";
   key: string;
   label: string;
-  format: ToggleFormatFn;
 }
 
 interface LayerRangeControl {
@@ -50,20 +46,6 @@ interface LayerTabConfig {
   controls: LayerControl[];
 }
 
-interface LayerToggleState {
-  input: HTMLInputElement;
-  value: HTMLElement;
-  format: ToggleFormatFn;
-}
-
-interface LayerParamState {
-  input: HTMLInputElement;
-  value: HTMLElement;
-  format: RangeFormatFn;
-  min: number;
-  max: number;
-}
-
 interface StarfieldControlApi {
   setLayerRadius(layerId: StarfieldControlLayerId, value: number): void;
   getLayerRadius(layerId: StarfieldControlLayerId): number;
@@ -77,16 +59,8 @@ interface StarfieldControlApi {
   setReadoutsChangeHandler(handler: () => void): void;
 }
 
-interface ControlButtons {
-  bake: HTMLButtonElement;
-  seed: HTMLButtonElement;
-  recenter: HTMLButtonElement;
-  overlay?: HTMLButtonElement | null;
-}
-
 interface CreateControlsArgs {
-  rows: HTMLElement;
-  buttons: ControlButtons;
+  container: HTMLElement;
   starfield: StarfieldControlApi;
   gpuStarfield: GpuStarfieldApi;
   getStats: (options?: { detail?: "panel" | "debug" }) => StarfieldStats;
@@ -98,10 +72,9 @@ interface StatsGroup {
   lines: string[];
 }
 
-const PARAMS: PanelParam[] = [
-  { group: "Layers" },
-  { kind: "layerTabs" },
-];
+interface FrameSample {
+  delta: number;
+}
 
 const STAR_LAYER_CONTROLS: LayerControl[] = [
   { type: "group", label: "Field" },
@@ -124,9 +97,9 @@ const STAR_LAYER_CONTROLS: LayerControl[] = [
 const LAYER_TABS: LayerTabConfig[] = [
   {
     id: STARFIELD_CONFIG.background.id,
-    label: "Background",
+    label: "Nebula",
     controls: [
-      { type: "toggle", key: "skyBackgroundEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "toggle", key: "skyBackgroundEnabled", label: "Enabled" },
       { type: "range", key: "skyBackgroundRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
       { type: "group", label: "Nebula" },
       { type: "range", key: "uSeed", label: "Seed", min: 0, max: 1000, step: 0.1, format: (v) => v.toFixed(1), param: true },
@@ -150,18 +123,18 @@ const LAYER_TABS: LayerTabConfig[] = [
   },
   {
     id: STARFIELD_CONFIG.baked.id,
-    label: "Baked",
+    label: "Stars Bg",
     controls: [
-      { type: "toggle", key: "bakedStarsEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "toggle", key: "bakedStarsEnabled", label: "Enabled" },
       { type: "range", key: "bakedStarsRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
       ...STAR_LAYER_CONTROLS,
     ],
   },
   {
     id: GPU_FIELD_LAYER_ID,
-    label: "GPU Field",
+    label: "Particles",
     controls: [
-      { type: "toggle", key: "enabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "toggle", key: "enabled", label: "Enabled" },
       { type: "group", label: "Runtime" },
       { type: "range", key: "starCount", label: "Star Count", min: 0, max: 30000, step: 512, format: (v) => v.toFixed(0), param: true },
       { type: "range", key: "fieldRadius", label: "Field Radius", min: 4, max: 40, step: 0.5, format: (v) => v.toFixed(1), param: true },
@@ -174,9 +147,9 @@ const LAYER_TABS: LayerTabConfig[] = [
   },
   {
     id: STARFIELD_CONFIG.overlay.id,
-    label: "Overlay",
+    label: "Stars Fg",
     controls: [
-      { type: "toggle", key: "brightOverlayEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
+      { type: "toggle", key: "brightOverlayEnabled", label: "Enabled" },
       { type: "range", key: "brightOverlayRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
       ...STAR_LAYER_CONTROLS,
       { type: "group", label: "Effects" },
@@ -190,11 +163,9 @@ const LAYER_TABS: LayerTabConfig[] = [
 ];
 
 const STATS_PANEL_REFRESH_MS = 250;
-
-function updateSliderFill(input: HTMLInputElement, min: number, max: number): void {
-  const value = Number(input.value);
-  input.style.setProperty("--fill", `${((value - min) / (max - min)) * 100}%`);
-}
+const FPS_ROLLING_WINDOW_SECONDS = 1.25;
+const FPS_SMOOTHING_SECONDS = 0.28;
+const FPS_GRAPH_MAX = 240;
 
 function formatNumber(value: unknown, digits = 1): string {
   const numeric = Number(value);
@@ -344,7 +315,7 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     `Density Scale: ${formatNumber(stats.densityScale, 2)}x`,
     `Density Fallback: ${stats.densityFallbackWarning ? "yes" : "no"}`,
     "",
-    "Catalog Classes",
+    "Catalog",
     `Tiny: ${formatInteger(stats.tinyStarCount)}`,
     `Normal: ${formatInteger(stats.normalStarCount)}`,
     `Bright: ${formatInteger(stats.brightStarClassCount)}`,
@@ -435,20 +406,66 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
   ].join("\n");
 }
 
-export function createControls({ rows, buttons, starfield, gpuStarfield, getStats, onRecenter }: CreateControlsArgs) {
-  const gpuStatsPanel = document.createElement("div");
-  gpuStatsPanel.id = "gpu-stats";
-  gpuStatsPanel.setAttribute("aria-live", "polite");
-  document.body.append(gpuStatsPanel);
+function createStatsGroups(stats: StarfieldStats): StatsGroup[] {
+  const groups: StatsGroup[] = [];
+  let currentGroup: StatsGroup | null = null;
 
-  let updatingStatsPanel = false;
+  formatGpuStatsForPanel(stats)
+    .split("\n")
+    .forEach((line) => {
+      if (!line) {
+        currentGroup = null;
+        return;
+      }
+
+      if (!currentGroup) {
+        currentGroup = { title: line, lines: [] };
+        groups.push(currentGroup);
+        return;
+      }
+
+      currentGroup.lines.push(line);
+    });
+
+  return groups;
+}
+
+function normalizeNumber(value: ControlValue): number {
+  return typeof value === "boolean" ? Number(value) : value;
+}
+
+function diagnosticsKey(title: string): string {
+  return title.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase();
+}
+
+function statsBindingRows(lines: string[]): number {
+  return Math.min(18, Math.max(4, lines.length + 1));
+}
+
+export function createControls({ container, starfield, gpuStarfield, getStats, onRecenter }: CreateControlsArgs) {
+  const pane = new Pane({ title: "Starfield", container });
+  const paneState: Record<ControlLayerId, PaneState> = {
+    skyBackground: {},
+    bakedStars: {},
+    [GPU_FIELD_LAYER_ID]: {},
+    brightOverlay: {},
+  };
+  const diagnosticState: PaneState = {};
+  const diagnosticBindings = new Map<string, RefreshableBinding>();
+  const layerBindings = new Map<string, RefreshableBinding>();
+  const actionState: PaneState = { bakeStatus: "Idle" };
+  const fpsState: PaneState = { fps: 0 };
+  const fpsSamples: FrameSample[] = [];
+
   let uxVisible = true;
+  let updatingDiagnostics = false;
   let statsRefreshTimer = 0;
   let lastStatsRefreshAt = 0;
-  const collapsedStatsGroups = new Set<string>();
-  const layerToggleInputs = new Map<string, LayerToggleState>();
-  const layerParamInputs = new Map<string, LayerParamState>();
-  let activeLayerId: ControlLayerId = STARFIELD_CONFIG.baked.id;
+  let fpsDeltaSum = 0;
+  let smoothedFps = 0;
+  let lastFpsLabel = "";
+  let fpsBinding: RefreshableBinding | null = null;
+  let bakeButton: ButtonApi;
 
   function isGpuFieldLayer(layer: string): layer is typeof GPU_FIELD_LAYER_ID {
     return layer === GPU_FIELD_LAYER_ID;
@@ -483,45 +500,58 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     return starfield.getLayerRadius(layer);
   }
 
-  function isUxVisible(): boolean {
-    return uxVisible;
+  function setLayerRadius(layer: ControlLayerId, value: number): void {
+    if (isGpuFieldLayer(layer)) return;
+    starfield.setLayerRadius(layer, value);
   }
 
-  function setUxVisible(nextVisible: boolean): void {
-    uxVisible = nextVisible;
-    document.body.classList.toggle("is-ux-hidden", !uxVisible);
-
-    if (uxVisible) {
-      refreshVisibleStatsPanel({ force: true });
-      return;
-    }
-
-    hideGpuStatsPanel();
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
+  function layerBindingKey(layer: ControlLayerId, key: string): string {
+    return `${layer}:${key}`;
   }
 
-  function collectStatsForPanel(options: { detail?: "panel" | "debug" } = {}): StarfieldStats {
-    updatingStatsPanel = true;
+  function syncLayerBinding(layer: ControlLayerId, key: string): void {
+    const binding = layerBindings.get(layerBindingKey(layer, key));
+    if (!binding) return;
+    const control = LAYER_TABS
+      .find((tab) => tab.id === layer)
+      ?.controls.find((entry): entry is LayerToggleControl | LayerRangeControl => entry.type !== "group" && entry.key === key);
+    if (!control) return;
+    if (control.type === "toggle") {
+      paneState[layer][key] = getLayerEnabled(layer);
+    } else if (control.param) {
+      paneState[layer][key] = normalizeNumber(getLayerParam(layer, key));
+    } else {
+      paneState[layer][key] = getLayerRadius(layer);
+    }
+    binding.refresh();
+  }
+
+  function syncOverlayControls(): void {
+    const enabled = starfield.getLayerEnabled("brightOverlay");
+    paneState.brightOverlay.brightOverlayEnabled = enabled;
+    syncLayerBinding("brightOverlay", "brightOverlayEnabled");
+  }
+
+  function collectStatsForPane(options: { detail?: "panel" | "debug" } = {}): StarfieldStats {
+    updatingDiagnostics = true;
     try {
       return getStats(options);
     } finally {
-      updatingStatsPanel = false;
+      updatingDiagnostics = false;
     }
   }
 
-  function scheduleNextStatsPanelRefresh(): void {
-    if (statsRefreshTimer || !isUxVisible() || !gpuStatsPanel.classList.contains("is-visible")) return;
-    statsRefreshTimer = window.setTimeout(() => {
-      statsRefreshTimer = 0;
-      refreshVisibleStatsPanel({ force: true });
-    }, STATS_PANEL_REFRESH_MS);
+  function updateDiagnostics(stats: StarfieldStats): void {
+    const groups = createStatsGroups(stats);
+    groups.forEach((group) => {
+      const key = diagnosticsKey(group.title);
+      diagnosticState[key] = group.lines.join("\n");
+      diagnosticBindings.get(key)?.refresh();
+    });
   }
 
-  function refreshVisibleStatsPanel({ force = false }: { force?: boolean } = {}): void {
-    if (updatingStatsPanel || !isUxVisible()) return;
-    if (!force && !gpuStatsPanel.classList.contains("is-visible")) return;
+  function refreshDiagnostics({ force = false }: { force?: boolean } = {}): void {
+    if (updatingDiagnostics || !uxVisible) return;
     const now = performance.now();
     const elapsed = now - lastStatsRefreshAt;
 
@@ -529,333 +559,39 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
       if (!statsRefreshTimer) {
         statsRefreshTimer = window.setTimeout(() => {
           statsRefreshTimer = 0;
-          refreshVisibleStatsPanel({ force: true });
+          refreshDiagnostics({ force: true });
         }, STATS_PANEL_REFRESH_MS - elapsed);
       }
       return;
     }
 
     lastStatsRefreshAt = now;
-    showGpuStatsPanel(collectStatsForPanel({ detail: "panel" }));
-    scheduleNextStatsPanelRefresh();
+    updateDiagnostics(collectStatsForPane({ detail: "panel" }));
+    scheduleNextDiagnosticsRefresh();
   }
 
-  function setBakeStatus(label: string, disabled = false): void {
-    buttons.bake.textContent = label;
-    buttons.bake.disabled = disabled;
+  function scheduleNextDiagnosticsRefresh(): void {
+    if (statsRefreshTimer || !uxVisible) return;
+    statsRefreshTimer = window.setTimeout(() => {
+      statsRefreshTimer = 0;
+      refreshDiagnostics({ force: true });
+    }, STATS_PANEL_REFRESH_MS);
   }
 
-  function setOverlayButtonState(enabled: boolean): void {
-    if (!buttons.overlay) return;
-    buttons.overlay.setAttribute("aria-pressed", enabled ? "true" : "false");
-  }
-
-  function syncLayerToggle(layer: ControlLayerId): void {
-    const control = layerToggleInputs.get(layer);
-    if (!control) return;
-    const enabled = getLayerEnabled(layer);
-    control.input.checked = enabled;
-    control.value.textContent = control.format(enabled);
-  }
-
-  function syncLayerParam(layer: ControlLayerId, key: string): void {
-    const control = layerParamInputs.get(`${layer}:${key}`);
-    if (!control) return;
-    const nextValue = getLayerParam(layer, key);
-    control.input.value = String(nextValue);
-    control.value.textContent = control.format(Number(nextValue));
-    updateSliderFill(control.input, control.min, control.max);
-  }
-
-  function syncSeedButtonState(): void {
-    buttons.seed.disabled = activeLayerId === "skyBackground" || activeLayerId === GPU_FIELD_LAYER_ID;
-  }
-
-  function toggleOverlay(): void {
-    const nextEnabled = !starfield.getLayerEnabled("brightOverlay");
-    starfield.setLayerEnabled("brightOverlay", nextEnabled);
-    setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
-    syncLayerToggle("brightOverlay");
-    refreshVisibleStatsPanel({ force: true });
-  }
-
-  function refreshReadouts(): void {
-    refreshVisibleStatsPanel();
-  }
-
-  function addLayerToggleRow(parent: HTMLElement, layer: ControlLayerId, control: LayerToggleControl): void {
-    const row = document.createElement("div");
-    row.className = "row row--toggle";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const label = document.createElement("label");
-    label.textContent = control.label;
-
-    const value = document.createElement("span");
-    value.className = "val";
-
-    const switchControl = document.createElement("div");
-    switchControl.className = "switch";
-
-    const input = document.createElement("input");
-    input.id = `control-${layer}-${control.key}`;
-    input.type = "checkbox";
-    input.checked = getLayerEnabled(layer);
-    label.htmlFor = input.id;
-    layerToggleInputs.set(layer, { input, value, format: control.format });
-
-    const track = document.createElement("span");
-    track.className = "switch-track";
-
-    function paint(nextValue: boolean): void {
-      value.textContent = control.format(nextValue);
-    }
-
-    input.addEventListener("change", () => {
-      paint(input.checked);
-      setLayerEnabled(layer, input.checked);
-      if (layer === "brightOverlay") {
-        setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
-      }
-      refreshVisibleStatsPanel({ force: true });
-    });
-    switchControl.addEventListener("click", (event) => {
-      if (event.target === input) return;
-      input.checked = !input.checked;
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    top.append(label, value);
-    switchControl.append(input, track);
-    row.append(top, switchControl);
-    parent.append(row);
-    paint(input.checked);
-  }
-
-  function addLayerRangeRow(parent: HTMLElement, layer: ControlLayerId, control: LayerRangeControl): void {
-    const row = document.createElement("div");
-    row.className = "row";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const label = document.createElement("label");
-    label.textContent = control.label;
-
-    const value = document.createElement("span");
-    value.className = "val";
-
-    const input = document.createElement("input");
-    input.id = `control-${layer}-${control.key}`;
-    input.type = "range";
-    input.min = String(control.min);
-    input.max = String(control.max);
-    input.step = String(control.step);
-    input.value = String(control.param ? getLayerParam(layer, control.key) : getLayerRadius(layer));
-    label.htmlFor = input.id;
-    if (control.param) {
-      layerParamInputs.set(`${layer}:${control.key}`, {
-        input,
-        value,
-        format: control.format,
-        min: control.min,
-        max: control.max,
-      });
-    }
-
-    function paint(nextValue: number): void {
-      value.textContent = control.format(nextValue);
-      updateSliderFill(input, control.min, control.max);
-    }
-
-    input.addEventListener("input", () => {
-      const nextValue = Number(input.value);
-      paint(nextValue);
-      if (control.param) {
-        setLayerParam(layer, control.key, nextValue, 180);
-        refreshVisibleStatsPanel();
-        return;
-      }
-      if (!isGpuFieldLayer(layer)) {
-        starfield.setLayerRadius(layer, nextValue);
-      }
-      refreshVisibleStatsPanel();
-    });
-
-    top.append(label, value);
-    row.append(top, input);
-    parent.append(row);
-    paint(Number(input.value));
-  }
-
-  function addLayerTabs(): void {
-    const row = document.createElement("div");
-    row.className = "row row--layer-tabs";
-
-    const tablist = document.createElement("div");
-    tablist.className = "layer-tabs";
-    tablist.setAttribute("role", "tablist");
-    tablist.setAttribute("aria-label", "Starfield layers");
-
-    const panels = document.createElement("div");
-    panels.className = "layer-tab-panels";
-
-    function activate(layerId: ControlLayerId): void {
-      activeLayerId = layerId;
-      Array.from(tablist.children).forEach((tabElement) => {
-        const tab = tabElement as HTMLElement;
-        const selected = tab.dataset.layer === layerId;
-        tab.classList.toggle("is-active", selected);
-        tab.setAttribute("aria-selected", selected ? "true" : "false");
-        tab.tabIndex = selected ? 0 : -1;
-      });
-
-      Array.from(panels.children).forEach((panelElement) => {
-        const panel = panelElement as HTMLElement;
-        panel.hidden = panel.dataset.layer !== layerId;
-      });
-      syncSeedButtonState();
-    }
-
-    LAYER_TABS.forEach((layer, index) => {
-      const selected = layer.id === activeLayerId;
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.className = "layer-tab";
-      tab.textContent = layer.label;
-      tab.dataset.layer = layer.id;
-      tab.id = `layer-tab-${layer.id}`;
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-controls", `layer-panel-${layer.id}`);
-      tab.setAttribute("aria-selected", selected ? "true" : "false");
-      tab.tabIndex = selected ? 0 : -1;
-      tab.addEventListener("click", () => activate(layer.id));
-
-      const panel = document.createElement("div");
-      panel.className = "layer-tab-panel";
-      panel.dataset.layer = layer.id;
-      panel.id = `layer-panel-${layer.id}`;
-      panel.setAttribute("role", "tabpanel");
-      panel.setAttribute("aria-labelledby", tab.id);
-      panel.hidden = !selected;
-
-      layer.controls.forEach((control) => {
-        if (control.type === "group") {
-          const group = document.createElement("div");
-          group.className = "group group--layer";
-          group.textContent = control.label;
-          panel.append(group);
-          return;
-        }
-        if (control.type === "toggle") {
-          addLayerToggleRow(panel, layer.id, control);
-          return;
-        }
-        addLayerRangeRow(panel, layer.id, control);
-      });
-
-      tablist.append(tab);
-      panels.append(panel);
-    });
-
-    row.append(tablist, panels);
-    rows.append(row);
-  }
-
-  function buildPanel(): void {
-    PARAMS.forEach((param) => {
-      if ("group" in param) {
-        const group = document.createElement("div");
-        group.className = "group";
-        group.textContent = param.group;
-        rows.append(group);
-        return;
-      }
-
-      if (param.kind === "layerTabs") {
-        addLayerTabs();
-      }
-    });
-  }
-
-  function createStatsGroups(stats: StarfieldStats): StatsGroup[] {
-    const groups: StatsGroup[] = [];
-    let currentGroup: StatsGroup | null = null;
-
-    formatGpuStatsForPanel(stats)
-      .split("\n")
-      .forEach((line) => {
-        if (!line) {
-          currentGroup = null;
-          return;
-        }
-
-        if (!currentGroup) {
-          currentGroup = { title: line, lines: [] };
-          groups.push(currentGroup);
-          return;
-        }
-
-        currentGroup.lines.push(line);
-      });
-
-    return groups;
-  }
-
-  function renderGpuStatsGroups(stats: StarfieldStats): void {
-    const fragment = document.createDocumentFragment();
-    const groups = createStatsGroups(stats);
-
-    groups.forEach((group) => {
-      const details = document.createElement("details");
-      details.className = "gpu-stats-group";
-      details.open = !collapsedStatsGroups.has(group.title);
-      details.dataset.group = group.title;
-
-      const summary = document.createElement("summary");
-      summary.className = "gpu-stats-summary";
-      summary.textContent = group.title;
-
-      const lines = document.createElement("pre");
-      lines.className = "gpu-stats-lines";
-      lines.textContent = group.lines.join("\n");
-
-      details.addEventListener("toggle", () => {
-        if (details.open) {
-          collapsedStatsGroups.delete(group.title);
-          return;
-        }
-        collapsedStatsGroups.add(group.title);
-      });
-
-      details.append(summary, lines);
-      fragment.append(details);
-    });
-
-    gpuStatsPanel.replaceChildren(fragment);
-  }
-
-  function showGpuStatsPanel(stats: StarfieldStats): void {
-    renderGpuStatsGroups(stats);
-    gpuStatsPanel.classList.add("is-visible");
-  }
-
-  function hideGpuStatsPanel(): void {
+  function setUxVisible(nextVisible: boolean): void {
+    uxVisible = nextVisible;
+    document.body.classList.toggle("is-ux-hidden", !uxVisible);
     clearTimeout(statsRefreshTimer);
     statsRefreshTimer = 0;
-    gpuStatsPanel.classList.remove("is-visible");
-  }
 
-  function printGpuStats(): void {
-    setUxVisible(true);
-    const stats = collectStatsForPanel({ detail: "debug" });
-    window.lastStarfieldGpuStats = stats;
-    showGpuStatsPanel(stats);
-    console.groupCollapsed("[Starfield GPU Stats]");
-    console.table(stats);
-    console.groupEnd();
+    if (uxVisible) {
+      refreshDiagnostics({ force: true });
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
   }
 
   function toggleUxVisibility(): void {
@@ -868,40 +604,170 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     toggleUxVisibility();
   }
 
+  function refreshReadouts(): void {
+    refreshDiagnostics();
+  }
+
+  function setBakeStatus(label: string, disabled = false): void {
+    actionState.bakeStatus = label;
+    bakeButton.title = disabled ? label : "Bake";
+    bakeButton.disabled = disabled;
+    pane.refresh();
+  }
+
+  function updateFps(deltaSeconds: number): void {
+    if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
+    const clampedDelta = Math.min(deltaSeconds, 0.25);
+    fpsSamples.push({ delta: clampedDelta });
+    fpsDeltaSum += clampedDelta;
+
+    while (fpsSamples.length > 1 && fpsDeltaSum - fpsSamples[0].delta > FPS_ROLLING_WINDOW_SECONDS) {
+      const sample = fpsSamples.shift();
+      if (sample) fpsDeltaSum -= sample.delta;
+    }
+
+    const rollingFps = fpsSamples.length / Math.max(fpsDeltaSum, 1 / FPS_GRAPH_MAX);
+    const alpha = 1 - Math.exp(-clampedDelta / FPS_SMOOTHING_SECONDS);
+    smoothedFps = smoothedFps > 0 ? smoothedFps + (rollingFps - smoothedFps) * alpha : rollingFps;
+    fpsState.fps = smoothedFps;
+    const nextLabel = `FPS (${Math.round(smoothedFps)})`;
+    if (nextLabel !== lastFpsLabel && fpsBinding && "label" in fpsBinding) {
+      (fpsBinding as RefreshableBinding & { label: string }).label = nextLabel;
+      lastFpsLabel = nextLabel;
+    }
+  }
+
+  function buildLayerBinding(parent: PaneContainer, layer: ControlLayerId, control: LayerToggleControl | LayerRangeControl): void {
+    if (control.type === "toggle") {
+      paneState[layer][control.key] = getLayerEnabled(layer);
+      const binding = parent.addBinding(paneState[layer], control.key, { label: control.label });
+      layerBindings.set(layerBindingKey(layer, control.key), binding);
+      binding.on("change", (event) => {
+        setLayerEnabled(layer, Boolean(event.value));
+        if (layer === "brightOverlay") syncOverlayControls();
+        refreshDiagnostics({ force: true });
+      });
+      return;
+    }
+
+    paneState[layer][control.key] = control.param ? normalizeNumber(getLayerParam(layer, control.key)) : getLayerRadius(layer);
+    const binding = parent.addBinding(paneState[layer], control.key, {
+      label: control.label,
+      min: control.min,
+      max: control.max,
+      step: control.step,
+      format: control.format,
+    });
+    layerBindings.set(layerBindingKey(layer, control.key), binding);
+    binding.on("change", (event) => {
+      const nextValue = Number(event.value);
+      if (!Number.isFinite(nextValue)) return;
+      if (control.param) {
+        setLayerParam(layer, control.key, nextValue, 180);
+      } else {
+        setLayerRadius(layer, nextValue);
+      }
+      refreshDiagnostics();
+    });
+  }
+
+  function buildLayerPage(page: TabPageApi, tab: LayerTabConfig): void {
+    let currentContainer: PaneContainer = page;
+
+    tab.controls.forEach((control) => {
+      if (control.type === "group") {
+        currentContainer = page.addFolder({ title: control.label, expanded: true });
+        return;
+      }
+      buildLayerBinding(currentContainer, tab.id, control);
+    });
+
+    if (tab.id === "bakedStars") {
+      page.addButton({ title: "Reseed Baked" }).on("click", () => {
+        starfield.reseedLayer("bakedStars");
+        syncLayerBinding("bakedStars", "uSeed");
+        refreshDiagnostics({ force: true });
+      });
+    } else if (tab.id === "brightOverlay") {
+      page.addButton({ title: "Reseed Overlay" }).on("click", () => {
+        starfield.reseedLayer("brightOverlay");
+        syncLayerBinding("brightOverlay", "uSeed");
+        refreshDiagnostics({ force: true });
+      });
+    }
+  }
+
+  function buildDiagnosticsPage(page: TabPageApi): void {
+    const initialStats = collectStatsForPane({ detail: "panel" });
+    createStatsGroups(initialStats).forEach((group) => {
+      const key = diagnosticsKey(group.title);
+      diagnosticState[key] = group.lines.join("\n");
+      const folder = page.addFolder({ title: group.title, expanded: group.title === "GPU Stats" || group.title === "Layers" });
+      const binding = folder.addBinding(diagnosticState, key, {
+        label: null as unknown as string,
+        readonly: true,
+        multiline: true,
+        rows: statsBindingRows(group.lines),
+      });
+      diagnosticBindings.set(key, binding);
+    });
+  }
+
+  function buildPane(): void {
+    fpsBinding = pane.addBinding(fpsState, "fps", {
+      label: "FPS",
+      readonly: true,
+      view: "graph",
+      min: 0,
+      max: FPS_GRAPH_MAX,
+      bufferSize: 120,
+      interval: 100,
+    });
+
+    const tabs = pane.addTab({
+      pages: [
+        ...LAYER_TABS.map((layer) => ({ title: layer.label })),
+        { title: "Dbg" },
+      ],
+    });
+    LAYER_TABS.forEach((layer, index) => buildLayerPage(tabs.pages[index], layer));
+    buildDiagnosticsPage(tabs.pages[LAYER_TABS.length]);
+    syncOverlayControls();
+
+    const actions = pane.addFolder({ title: "Actions", expanded: true });
+    actions.addBinding(actionState, "bakeStatus", { label: "Bake Status", readonly: true });
+    bakeButton = actions.addButton({ title: "Bake" });
+    bakeButton.on("click", () => starfield.bakeNow());
+    actions.addButton({ title: "Recenter" }).on("click", onRecenter);
+  }
+
+  function printGpuStats(): void {
+    setUxVisible(true);
+    const stats = collectStatsForPane({ detail: "debug" });
+    window.lastStarfieldGpuStats = stats;
+    updateDiagnostics(stats);
+    console.groupCollapsed("[Starfield GPU Stats]");
+    console.table(stats);
+    console.groupEnd();
+  }
+
   starfield.setBakeStatusHandler(setBakeStatus);
   starfield.setReadoutsChangeHandler(refreshReadouts);
-  buttons.bake.addEventListener("click", () => starfield.bakeNow());
-  buttons.seed.addEventListener("click", () => {
-    if (activeLayerId === "skyBackground" || activeLayerId === GPU_FIELD_LAYER_ID) return;
-    starfield.reseedLayer(activeLayerId);
-    syncLayerParam(activeLayerId, "uSeed");
-    refreshVisibleStatsPanel({ force: true });
-  });
-  buttons.recenter.addEventListener("click", onRecenter);
-  buttons.overlay?.addEventListener("click", toggleOverlay);
   document.addEventListener("keydown", handleUxHotkey, true);
   window.printStarfieldGpuStats = printGpuStats;
 
-  buildPanel();
-  const layerIds: ControlLayerId[] = [
-    STARFIELD_CONFIG.background.id,
-    STARFIELD_CONFIG.baked.id,
-    GPU_FIELD_LAYER_ID,
-    STARFIELD_CONFIG.overlay.id,
-  ];
-  layerIds.forEach(syncLayerToggle);
-  setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
-  syncSeedButtonState();
+  buildPane();
+  refreshDiagnostics({ force: true });
 
   return {
+    updateFps,
     refreshReadouts,
     printGpuStats,
     dispose() {
       clearTimeout(statsRefreshTimer);
-      buttons.overlay?.removeEventListener("click", toggleOverlay);
       document.removeEventListener("keydown", handleUxHotkey, true);
       document.body.classList.remove("is-ux-hidden");
-      gpuStatsPanel.remove();
+      pane.dispose();
     },
   };
 }
