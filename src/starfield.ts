@@ -408,6 +408,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       nebulaExposure: backgroundUniforms.uNebulaExposure.value,
     }),
     renderOrder: -10,
+    fallbackDomeColor: new THREE.Color(0.004, 0.005, 0.011),
     onBlendStatsChange: () => {
       backgroundPipeline?.syncStats();
       syncOverlayStats();

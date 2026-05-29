@@ -32,6 +32,7 @@ interface SkydomeManagerArgs {
     uvSize: THREE.Vector2;
   };
   renderOrder?: number;
+  fallbackDomeColor?: THREE.ColorRepresentation | null;
   onBlendStatsChange?: (activeBlendCount: number) => void;
 }
 
@@ -48,12 +49,51 @@ export function createSkydomeManager({
     uvSize: descriptor.uvSize,
   }),
   renderOrder = 0,
+  fallbackDomeColor = null,
   onBlendStatsChange = () => {},
 }: SkydomeManagerArgs) {
   const bakedDomeGroup = new THREE.Group();
   const activePatchBlends = new Set<PatchDescriptor>();
   let domeRadius = Number.isFinite(initialRadius) ? initialRadius : DOME_RADIUS;
+  let fallbackDomeMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> | null = null;
   scene.add(bakedDomeGroup);
+
+  function createFallbackDomeMesh(): THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> | null {
+    if (fallbackDomeColor === null) return null;
+    const sphereSegments = getSphereSegments();
+    const geometry = new THREE.SphereGeometry(
+      domeRadius * 1.0005,
+      sphereSegments,
+      sphereVerticalSegmentsFor(sphereSegments),
+    );
+    const material = new THREE.MeshBasicMaterial({
+      color: fallbackDomeColor,
+      side: THREE.BackSide,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = renderOrder - 1;
+    return mesh;
+  }
+
+  function rebuildFallbackDomeMesh(): void {
+    if (fallbackDomeMesh) {
+      scene.remove(fallbackDomeMesh);
+      fallbackDomeMesh.geometry.dispose();
+      fallbackDomeMesh.material.dispose();
+      fallbackDomeMesh = null;
+    }
+
+    fallbackDomeMesh = createFallbackDomeMesh();
+    if (fallbackDomeMesh) {
+      fallbackDomeMesh.visible = bakedDomeGroup.visible;
+      scene.add(fallbackDomeMesh);
+    }
+  }
+
+  rebuildFallbackDomeMesh();
 
   function createDomeGeometry(descriptor: PatchDescriptor): THREE.SphereGeometry {
     const sphereSegments = getSphereSegments();
@@ -231,6 +271,7 @@ export function createSkydomeManager({
 
   function rebuildBakedDomeMeshes(descriptors: PatchDescriptor[]): void {
     disposeBakedDomeMeshes();
+    rebuildFallbackDomeMesh();
     descriptors.forEach((descriptor) => {
       bakedDomeGroup.add(createPatchDomeMesh(descriptor));
     });
@@ -238,6 +279,9 @@ export function createSkydomeManager({
 
   function setVisible(visible: boolean): void {
     bakedDomeGroup.visible = Boolean(visible);
+    if (fallbackDomeMesh) {
+      fallbackDomeMesh.visible = Boolean(visible);
+    }
     requestRender();
   }
 
@@ -300,6 +344,12 @@ export function createSkydomeManager({
 
   function dispose(): void {
     disposeBakedDomeMeshes();
+    if (fallbackDomeMesh) {
+      scene.remove(fallbackDomeMesh);
+      fallbackDomeMesh.geometry.dispose();
+      fallbackDomeMesh.material.dispose();
+      fallbackDomeMesh = null;
+    }
     scene.remove(bakedDomeGroup);
     activePatchBlends.clear();
     syncBlendStats();

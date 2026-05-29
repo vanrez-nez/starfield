@@ -253,6 +253,21 @@ function sizeMultiplierNode(rSize: any, rSizeGate: any, uLargeStarRarity: any, u
   return mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, sizeRankNode(rSize, rSizeGate, uLargeStarRarity)), uSizeVar);
 }
 
+const OVERLAY_STAR_SIZE_RARITY_EXPONENT = 2.8;
+const OVERLAY_STAR_SIZE_GATE_EXPONENT = 5.0;
+const OVERLAY_STAR_SIZE_GATE_MIN = 0.25;
+
+function overlaySizeRankNode(rSize: any, rSizeGate: any, uLargeStarRarity: any): any {
+  const baseRank = pow(clamp(rSize, 0.0, 1.0), OVERLAY_STAR_SIZE_RARITY_EXPONENT);
+  const gateRank = pow(clamp(rSizeGate, 0.0, 1.0), OVERLAY_STAR_SIZE_GATE_EXPONENT);
+  const gate = mix(1.0, mix(OVERLAY_STAR_SIZE_GATE_MIN, 1.0, gateRank), uLargeStarRarity);
+  return clamp(baseRank.mul(gate), 0.0, 1.0);
+}
+
+function overlaySizeMultiplierNode(rSize: any, rSizeGate: any, uLargeStarRarity: any, uSizeVar: any): any {
+  return mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, overlaySizeRankNode(rSize, rSizeGate, uLargeStarRarity)), uSizeVar);
+}
+
 function angularPixelNode(textureSize: any, uTileUvSize: any): any {
   return PI.mul(max(uTileUvSize.y, 1e-6)).div(max(textureSize.y, 1.0));
 }
@@ -498,7 +513,7 @@ export function createOverlayMaterial(uniforms: UniformMap): StarfieldMaterial {
     const referenceUp = (select as any)(abs(dir.y).greaterThan(0.96), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
     const right = normalize(cross(referenceUp, dir) as any) as any;
     const up = normalize(cross(right, dir) as any) as any;
-    const scale = sizeMultiplierNode(iRandoms.x, iSizeGate, uLargeStarRarity, uSizeVar);
+    const scale = overlaySizeMultiplierNode(iRandoms.x, iSizeGate, uLargeStarRarity, uSizeVar);
     const starRadius = uStarSize.mul(scale).mul(uScreenPixelAngle);
     const coreSupportRadius = max(starRadius, float(MIN_CORE_PIXELS).mul(uScreenPixelAngle));
     const coreSigma = max(coreSupportRadius.mul(0.42), uScreenPixelAngle.mul(0.5));
@@ -525,8 +540,8 @@ export function createOverlayMaterial(uniforms: UniformMap): StarfieldMaterial {
     const flashDepth = clamp(uWinkleAmount.mul(uWinkleFlashiness), 0.0, 1.0);
     const burstSeed = hash41Node(vec4(vRandoms.xyz, vSizeGate));
     const burst = groupedBurstNode(burstSeed, burstSeed.mul(41.0), vRandoms.y.mul(0.85).add(0.65), uTime);
-    const rank = sizeRankNode(vRandoms.x, vSizeGate, uLargeStarRarity);
-    const scale = sizeMultiplierNode(vRandoms.x, vSizeGate, uLargeStarRarity, uSizeVar);
+    const rank = overlaySizeRankNode(vRandoms.x, vSizeGate, uLargeStarRarity);
+    const scale = overlaySizeMultiplierNode(vRandoms.x, vSizeGate, uLargeStarRarity, uSizeVar);
     const visualSizePx = uStarSize.mul(scale);
     const smallBlinkMask = sizeRangeMaskNode(visualSizePx, uEffectMinSize, uEffectMaxSize);
     const activeSmallBlink = smallBlinkMask.mul(smoothstep(0.001, 0.05, flashDepth));
@@ -609,7 +624,7 @@ export function createWinkleMaterial(uniforms: UniformMap): StarfieldMaterial {
     const referenceUp = (select as any)(abs(dir.y).greaterThan(0.96), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
     const right = normalize(cross(referenceUp, dir) as any) as any;
     const up = normalize(cross(right, dir) as any) as any;
-    const scale = sizeMultiplierNode(iRandoms.x, iSizeGate, uLargeStarRarity, uSizeVar);
+    const scale = overlaySizeMultiplierNode(iRandoms.x, iSizeGate, uLargeStarRarity, uSizeVar);
     const starRadius = uStarSize.mul(scale).mul(uScreenPixelAngle);
     const glareRadius = max(uGlareSize, 1.0).mul(mix(1.0, scale, uSizeVar)).mul(uScreenPixelAngle);
     const classBoost = (select as any)(iClass.greaterThan(2.5), 1.35, 1.0);
@@ -640,7 +655,7 @@ export function createWinkleMaterial(uniforms: UniformMap): StarfieldMaterial {
     const burstSeed = hash41Node(vec4(vRandoms.xyz, vSizeGate));
     const burst = groupedBurstNode(burstSeed, phase, speed, uTime);
     const pulse = mix(soloPulse, max(soloPulse.mul(0.32), burst), flashiness);
-    const rank = sizeRankNode(vRandoms.x, vSizeGate, uLargeStarRarity);
+    const rank = overlaySizeRankNode(vRandoms.x, vSizeGate, uLargeStarRarity);
     const scale = mix(1.0, mix(STAR_SIZE_MIN_SCALE, 1.0, rank), uSizeVar);
     const visualSizePx = uStarSize.mul(scale);
     const smallBlinkMask = sizeRangeMaskNode(visualSizePx, uEffectMinSize, uEffectMaxSize);
