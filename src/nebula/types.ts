@@ -144,6 +144,7 @@ export interface NebulaLayerDefaults {
 
 export interface NebulaLayerApi {
   defaults: NebulaLayerDefaults;
+  readonly activeBlendCount: number;
   getParams(): NebulaParams;
   getParam(key: string): number;
   getUniforms(): NebulaUniforms;

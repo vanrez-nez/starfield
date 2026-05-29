@@ -49,13 +49,13 @@ const BASE_QUAD_POSITIONS = new Float32Array([
 
 const DEFAULTS: GpuStarfieldParams = Object.freeze({
   enabled: true,
-  starCount: 6144,
+  starCount: 10000,
   fieldRadius: 14,
   depthFade: 0.45,
-  travelSpeed: 0,
-  starSize: 1.15,
-  brightness: 0.55,
-  colorVariance: 0.55,
+  travelSpeed: 1,
+  starSize: 5,
+  brightness: 1,
+  colorVariance: 1,
 });
 
 function mixUint32(value: number): number {

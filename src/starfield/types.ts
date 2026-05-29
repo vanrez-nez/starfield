@@ -311,35 +311,6 @@ export interface DownsampleUniforms extends UniformMap {
   uExposure: MutableUniform<number>;
 }
 
-export interface BackgroundUniforms extends UniformMap {
-  uTileUvMin: MutableUniform<THREE.Vector2>;
-  uTileUvSize: MutableUniform<THREE.Vector2>;
-  uAnchorCount: MutableUniform<number>;
-  uBlend: MutableUniform<number>;
-  uPower: MutableUniform<number>;
-  uSigma: MutableUniform<number>;
-  uColorWarpAmp: MutableUniform<number>;
-  uColorWarpFreq: MutableUniform<number>;
-  uAnchorDir: MutableUniform<THREE.Vector3[]>;
-  uAnchorColor: MutableUniform<THREE.Vector3[]>;
-  uSeed: MutableUniform<number>;
-  uCoverage: MutableUniform<number>;
-  uDensity: MutableUniform<number>;
-  uSoftness: MutableUniform<number>;
-  uContrast: MutableUniform<number>;
-  uBaseScale: MutableUniform<number>;
-  uOctaves: MutableUniform<number>;
-  uOpacity: MutableUniform<number>;
-  uLightFocus: MutableUniform<number>;
-  uLightLining: MutableUniform<number>;
-  uLightIntensity: MutableUniform<number>;
-  uNebulaStrength: MutableUniform<number>;
-  uNebulaExposure: MutableUniform<number>;
-  uCloudShadow: MutableUniform<THREE.Vector3>;
-  uCloudHighlight: MutableUniform<THREE.Vector3>;
-  uCloudCore: MutableUniform<THREE.Vector3>;
-}
-
 export type StatsValue =
   | string
   | number
@@ -368,21 +339,6 @@ export interface RendererInfoLike {
   programs?: unknown[];
 }
 
-export interface FieldGradientAnchor {
-  dir: [number, number, number];
-  color: [number, number, number];
-}
-
-export interface FieldGradient {
-  type: "gradient";
-  mode: "field";
-  blend: "idw" | "gaussian";
-  power?: number;
-  sigma?: number;
-  warp: { amp: number; freq: number } | null;
-  anchors: FieldGradientAnchor[];
-}
-
 export type LayerId = "skyBackground" | "bakedStars" | "brightOverlay";
 
 export interface StarLayerParams {
@@ -403,28 +359,6 @@ export interface StarLayerParams {
   uEffectMaxSize?: number;
   uWinkleSharpness?: number;
   uWinkleFlashiness?: number;
-}
-
-export interface BackgroundParams {
-  [key: string]: number | number[];
-  uSeed: number;
-  uCoverage: number;
-  uDensity: number;
-  uSoftness: number;
-  uContrast: number;
-  uBaseScale: number;
-  uOctaves: number;
-  uOpacity: number;
-  uLightFocus: number;
-  uLightLining: number;
-  uLightIntensity: number;
-  uNebulaStrength: number;
-  uNebulaExposure: number;
-  uCloudShadow: number[];
-  uCloudHighlight: number[];
-  uCloudCore: number[];
-  uColorWarpAmp: number;
-  uColorWarpFreq: number;
 }
 
 export interface GpuStarfieldApi {

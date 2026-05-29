@@ -9,17 +9,12 @@ import {
   DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
   DEFAULT_EFFECT_MAX_SIZE,
   DEFAULT_EFFECT_MIN_SIZE,
-  DEFAULT_FIELD_GRADIENT,
   DEFAULT_LARGE_STAR_RARITY,
-  DEFAULT_LIGHT_COMPOSITION_BACKGROUND,
   DEFAULT_WINKLE_AMOUNT,
   DEFAULT_WINKLE_FLASHINESS,
   DEFAULT_WINKLE_SHARPNESS,
-  DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
-  LIGHT_COMPOSITION_MAX_ANCHORS,
-  MIN_BACKGROUND_SPHERE_SEGMENTS,
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
   STARFIELD_ALLOCATION_BUDGET_BYTES,
@@ -42,9 +37,7 @@ import {
 } from "./starfield/catalog";
 import { createRenderTargetManager } from "./starfield/render-targets";
 import {
-  createBackgroundPatchDomeMaterial,
   createDownsampleMaterial,
-  createLightCompositionBakeMaterial,
   createStarMaterial,
 } from "./starfield/shaders";
 import { createSkydomeManager } from "./starfield/skydome";
@@ -60,14 +53,20 @@ import {
   updateSphereSegmentStats,
 } from "./starfield/stats";
 import { createBakePipeline } from "./starfield/bake-pipeline";
-import { createBackgroundBakePipeline } from "./starfield/background-bake-pipeline";
+import {
+  DEFAULT_NEBULA_PARAMS,
+  DEFAULT_NEBULA_RADIUS,
+  cloneNebulaParams,
+  createNebulaLayer,
+} from "./nebula";
 import type {
-  BackgroundParams,
-  BackgroundUniforms,
+  NebulaLayerApi,
+  NebulaParams,
+} from "./nebula";
+import type {
   BakeUniforms,
   CameraInfo,
   DownsampleUniforms,
-  FieldGradient,
   LayerId,
   OverlayUniforms,
   PatchDescriptor,
@@ -83,7 +82,6 @@ import type {
 } from "./starfield/types";
 
 type BakePipeline = ReturnType<typeof createBakePipeline>;
-type BackgroundBakePipeline = ReturnType<typeof createBackgroundBakePipeline>;
 type DemandReadouts = ReturnType<typeof computeDemandReadoutsFromStats>;
 
 interface CreateStarfieldArgs {
@@ -104,77 +102,8 @@ interface LayerStateEntry<P extends Record<string, unknown>, U extends UniformMa
 }
 
 interface StarfieldLayerState {
-  skyBackground: LayerStateEntry<BackgroundParams, BackgroundUniforms>;
   bakedStars: LayerStateEntry<StarLayerParams, BakeUniforms>;
   brightOverlay: LayerStateEntry<StarLayerParams, OverlayUniforms>;
-}
-
-function vectorFromArray(value: unknown, fallback: [number, number, number] = [0, 0, 0]): THREE.Vector3 {
-  const source = Array.isArray(value) && value.length >= 3 ? value : fallback;
-  return new THREE.Vector3(Number(source[0]) || 0, Number(source[1]) || 0, Number(source[2]) || 0);
-}
-
-function normalizedVectorFromArray(value: unknown, fallback: [number, number, number] = [0, 0, 1]): THREE.Vector3 {
-  const vector = vectorFromArray(value, fallback);
-  if (vector.lengthSq() < 1e-8) return vectorFromArray(fallback).normalize();
-  return vector.normalize();
-}
-
-function applyFieldGradientToUniforms(uniforms: BackgroundUniforms, gradient: Readonly<FieldGradient> = DEFAULT_FIELD_GRADIENT): void {
-  const anchors = Array.isArray(gradient.anchors) ? gradient.anchors.slice(0, LIGHT_COMPOSITION_MAX_ANCHORS) : [];
-  uniforms.uAnchorCount.value = anchors.length;
-  uniforms.uBlend.value = gradient.blend === "gaussian" ? 1 : 0;
-  uniforms.uPower.value = typeof gradient.power === "number" && Number.isFinite(gradient.power) ? gradient.power : 2;
-  uniforms.uSigma.value = typeof gradient.sigma === "number" && Number.isFinite(gradient.sigma) ? gradient.sigma : 0.34;
-  uniforms.uColorWarpAmp.value = Number.isFinite(gradient.warp?.amp)
-    ? gradient.warp?.amp ?? uniforms.uColorWarpAmp.value
-    : uniforms.uColorWarpAmp.value;
-  uniforms.uColorWarpFreq.value = Number.isFinite(gradient.warp?.freq)
-    ? gradient.warp?.freq ?? uniforms.uColorWarpFreq.value
-    : uniforms.uColorWarpFreq.value;
-
-  for (let index = 0; index < LIGHT_COMPOSITION_MAX_ANCHORS; index += 1) {
-    const anchor = anchors[index];
-    uniforms.uAnchorDir.value[index].copy(normalizedVectorFromArray(anchor?.dir));
-    uniforms.uAnchorColor.value[index].copy(vectorFromArray(anchor?.color));
-  }
-}
-
-function createLightCompositionUniforms(
-  params: BackgroundParams,
-  gradient: Readonly<FieldGradient> = DEFAULT_FIELD_GRADIENT,
-): BackgroundUniforms {
-  const uniforms = {
-    uTileUvMin: { value: new THREE.Vector2(0, 0) },
-    uTileUvSize: { value: new THREE.Vector2(1, 1) },
-    uAnchorCount: { value: 0 },
-    uBlend: { value: 1 },
-    uPower: { value: 2 },
-    uSigma: { value: 0.34 },
-    uColorWarpAmp: { value: params.uColorWarpAmp },
-    uColorWarpFreq: { value: params.uColorWarpFreq },
-    uAnchorDir: { value: Array.from({ length: LIGHT_COMPOSITION_MAX_ANCHORS }, () => new THREE.Vector3(0, 0, 1)) },
-    uAnchorColor: { value: Array.from({ length: LIGHT_COMPOSITION_MAX_ANCHORS }, () => new THREE.Vector3()) },
-    uSeed: { value: params.uSeed },
-    uCoverage: { value: params.uCoverage },
-    uDensity: { value: params.uDensity },
-    uSoftness: { value: params.uSoftness },
-    uContrast: { value: params.uContrast },
-    uBaseScale: { value: params.uBaseScale },
-    uOctaves: { value: params.uOctaves },
-    uOpacity: { value: params.uOpacity },
-    uLightFocus: { value: params.uLightFocus },
-    uLightLining: { value: params.uLightLining },
-    uLightIntensity: { value: params.uLightIntensity },
-    uNebulaStrength: { value: params.uNebulaStrength },
-    uNebulaExposure: { value: params.uNebulaExposure },
-    uCloudShadow: { value: vectorFromArray(params.uCloudShadow) },
-    uCloudHighlight: { value: vectorFromArray(params.uCloudHighlight) },
-    uCloudCore: { value: vectorFromArray(params.uCloudCore) },
-  };
-
-  applyFieldGradientToUniforms(uniforms, gradient);
-  return uniforms;
 }
 
 export function createStarfield({ renderer, scene, requestRender }: CreateStarfieldArgs) {
@@ -228,17 +157,12 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     uColorVar: 1,
     uSeed: 1,
   };
-  const defaultBackgroundParams: BackgroundParams = {
-    ...DEFAULT_LIGHT_COMPOSITION_BACKGROUND,
-    uCloudShadow: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudShadow],
-    uCloudHighlight: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudHighlight],
-    uCloudCore: [...DEFAULT_LIGHT_COMPOSITION_BACKGROUND.uCloudCore],
-  };
+  const defaultBackgroundParams: NebulaParams = cloneNebulaParams(DEFAULT_NEBULA_PARAMS);
   const defaults = {
     ...defaultStarParams,
     sphereSegments: 128,
     skyBackgroundEnabled: true,
-    skyBackgroundRadius: DEFAULT_SKY_BACKGROUND_RADIUS,
+    skyBackgroundRadius: DEFAULT_NEBULA_RADIUS,
     bakedStarsEnabled: true,
     bakedStarsRadius: DEFAULT_BAKED_STAR_RADIUS,
     brightOverlayEnabled: BRIGHT_STAR_OVERLAY_ENABLED,
@@ -253,16 +177,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
 
   let currentSphereSegments = defaults.sphereSegments;
   const layerState: StarfieldLayerState = {
-    skyBackground: {
-      enabled: defaults.skyBackgroundEnabled,
-      radius: defaults.skyBackgroundRadius,
-      params: {
-        ...defaultBackgroundParams,
-        uCloudShadow: [...defaultBackgroundParams.uCloudShadow],
-        uCloudHighlight: [...defaultBackgroundParams.uCloudHighlight],
-        uCloudCore: [...defaultBackgroundParams.uCloudCore],
-      },
-    },
     bakedStars: {
       enabled: defaults.bakedStarsEnabled,
       radius: defaults.bakedStarsRadius,
@@ -293,20 +207,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
 
   const fallbackPatchTexture = targetManager.createFallbackPatchTexture();
   const fallbackPatchTarget: PatchTextureTarget = { texture: fallbackPatchTexture };
-  const fallbackBackgroundTexture = new THREE.DataTexture(
-    new Uint8Array([8, 16, 44, 255]),
-    1,
-    1,
-    THREE.RGBAFormat,
-  );
-  fallbackBackgroundTexture.name = "Fallback baked nebula patch";
-  fallbackBackgroundTexture.colorSpace = THREE.LinearSRGBColorSpace;
-  fallbackBackgroundTexture.minFilter = THREE.LinearFilter;
-  fallbackBackgroundTexture.magFilter = THREE.LinearFilter;
-  fallbackBackgroundTexture.wrapS = THREE.ClampToEdgeWrapping;
-  fallbackBackgroundTexture.wrapT = THREE.ClampToEdgeWrapping;
-  fallbackBackgroundTexture.needsUpdate = true;
-  const fallbackBackgroundTarget: PatchTextureTarget = { texture: fallbackBackgroundTexture };
   const screenPixelAngleUniform = { value: Math.PI / REFERENCE_BAKE_HEIGHT };
   const referenceHeightUniform = { value: REFERENCE_BAKE_HEIGHT };
 
@@ -352,16 +252,8 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness ?? DEFAULT_WINKLE_SHARPNESS },
     uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness ?? DEFAULT_WINKLE_FLASHINESS },
   };
-  const backgroundUniforms = createLightCompositionUniforms(layerState.skyBackground.params, DEFAULT_FIELD_GRADIENT);
-  layerState.skyBackground.uniforms = backgroundUniforms;
   layerState.bakedStars.uniforms = bakeUniforms;
   layerState.brightOverlay.uniforms = overlayUniforms;
-
-  const backgroundBakeMaterial = createLightCompositionBakeMaterial(backgroundUniforms);
-  const backgroundBakeScene = new THREE.Scene();
-  const backgroundBakeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), backgroundBakeMaterial);
-  backgroundBakeQuad.frustumCulled = false;
-  backgroundBakeScene.add(backgroundBakeQuad);
 
   const starMaterial = createStarMaterial(bakeUniforms);
   let starGeometry = createEmptyStarGeometry();
@@ -393,29 +285,18 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   let currentPatchLayout = defaultPatchLayout;
   let currentSupersample = currentPatchLayout.supersample;
   let patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
-  let backgroundPatchDescriptors = createBackgroundPatchDescriptors(currentPatchLayout);
   let supersampleTarget = targetManager.createAccumulationTarget(1, 1);
-
-  const backgroundSkydome = createSkydomeManager({
+  const nebulaLayer: NebulaLayerApi = createNebulaLayer({
+    renderer,
     scene,
+    bakeCamera,
     requestRender,
     targetManager,
-    fallbackPatchTarget: fallbackBackgroundTarget,
-    getSphereSegments: () => Math.max(currentSphereSegments, MIN_BACKGROUND_SPHERE_SEGMENTS),
-    initialRadius: layerState.skyBackground.radius,
-    createMaterial: (args) => createBackgroundPatchDomeMaterial({
-      ...args,
-      nebulaExposure: backgroundUniforms.uNebulaExposure.value,
-    }),
-    renderOrder: -10,
-    fallbackDomeColor: new THREE.Color(0.004, 0.005, 0.011),
-    onBlendStatsChange: () => {
-      backgroundPipeline?.syncStats();
-      syncOverlayStats();
-    },
+    initialLayout: currentPatchLayout,
+    stats,
+    notifyReadouts,
+    getSphereSegments: () => currentSphereSegments,
   });
-  backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
-  backgroundSkydome.setVisible(layerState.skyBackground.enabled);
 
   const skydome = createSkydomeManager({
     scene,
@@ -427,7 +308,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     onBlendStatsChange: () => pipeline?.syncBakeQueueStats(),
   });
   skydome.rebuildBakedDomeMeshes(patchDescriptors);
-  let backgroundPipeline: BackgroundBakePipeline;
   pipeline = createBakePipeline({
     renderer,
     starScene,
@@ -473,28 +353,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     },
     requestRender,
   });
-  backgroundPipeline = createBackgroundBakePipeline({
-    renderer,
-    bakeCamera,
-    backgroundScene: backgroundBakeScene,
-    backgroundUniforms,
-    skydome: backgroundSkydome,
-    stats,
-    getPatchDescriptors: () => backgroundPatchDescriptors,
-    targetForDescriptor: backgroundTargetForDescriptor,
-    targetMatchesDescriptor,
-    releaseTarget: (target: PatchRenderTarget) => targetManager.releaseTarget(target),
-    descriptorById: backgroundDescriptorById,
-    targetBytes: (target: PatchRenderTarget) => targetManager.patchTargetBytes(target),
-    notifyReadouts,
-    requestRender,
-    onBakeQueueDrained: () => {
-      backgroundPipeline.syncStats();
-      targetManager.disposeTargetPool();
-      syncOverlayStats();
-      notifyReadouts();
-    },
-  });
 
   function accumulationBytesPerPixel(): number {
     return accumulationType === THREE.HalfFloatType ? 8 : 4;
@@ -531,7 +389,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       residentBytesPerPixel: residentPatchBytesPerPixel,
       bakeScratchBytes: currentBakeScratchBytes(),
       queueState: pipeline.queueState(),
-      activeBlendCount: skydome.activeBlendCount + backgroundSkydome.activeBlendCount,
+      activeBlendCount: skydome.activeBlendCount + nebulaLayer.activeBlendCount,
       setCameraInfo,
       syncOverlayStats,
     };
@@ -654,20 +512,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     return target;
   }
 
-  function backgroundTargetForDescriptor(descriptor: PatchDescriptor, name = "Baked nebula patch"): PatchRenderTarget {
-    applyDescriptorBakeStorage(descriptor);
-    const target = targetManager.acquireTarget(descriptor.storageSize.width, descriptor.storageSize.height, {
-      name,
-      wrapS: descriptor.wrapS,
-      wrapT: descriptor.wrapT,
-      type: targetManager.backgroundTargetType,
-      colorSpace: targetManager.backgroundTargetColorSpace,
-      bytesPerPixel: targetManager.backgroundTargetBytesPerPixel,
-    });
-    attachTargetSamplingMetadata(descriptor, target);
-    return target;
-  }
-
   function targetMatchesDescriptor(descriptor: PatchDescriptor, target: PatchRenderTarget | null): boolean {
     if (!target) return false;
     const storageSize = plannedDescriptorStorageSize(descriptor);
@@ -699,60 +543,13 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     return descriptors;
   }
 
-  function createBackgroundPatchDescriptors(layout: PatchLayout): PatchDescriptor[] {
-    const descriptors = createPatchDescriptorList(layout, maxTextureSize);
-    descriptors.forEach((descriptor) => {
-      descriptor.backgroundDirty = true;
-      descriptor.backgroundDirtyReason = "new";
-      descriptor.fallbackState = FALLBACK_STATES.EMPTY;
-      descriptor.allocationState = ALLOCATION_STATES.UNALLOCATED;
-    });
-    return descriptors;
-  }
-
   function descriptorById(patchId: string): PatchDescriptor | undefined {
     return patchDescriptors.find((descriptor) => descriptor.id === patchId);
   }
 
-  function backgroundDescriptorById(patchId: string): PatchDescriptor | undefined {
-    return backgroundPatchDescriptors.find((descriptor) => descriptor.id === patchId);
-  }
-
-  function descriptorMeshTriangles(descriptor: PatchDescriptor): number {
-    const geometry = descriptor.mesh?.geometry;
-    if (!geometry) return 0;
-    if (geometry.index) return Math.round(geometry.index.count / 3);
-    return Math.round((geometry.attributes.position?.count ?? 0) / 3);
-  }
-
-  function syncBackgroundStats(): void {
-    backgroundPipeline?.syncStats();
-    const visible = layerState.skyBackground.enabled;
-    stats.backgroundLayerEnabled = visible;
-    stats.backgroundLayerDrawCalls = visible ? backgroundPatchDescriptors.length : 0;
-    stats.backgroundLayerTriangles = visible
-      ? backgroundPatchDescriptors.reduce((total, descriptor) => total + descriptorMeshTriangles(descriptor), 0)
-      : 0;
-    stats.backgroundLayerRadius = layerState.skyBackground.radius;
-    stats.backgroundSeed = backgroundUniforms.uSeed.value;
-    stats.backgroundCoverage = backgroundUniforms.uCoverage.value;
-    stats.backgroundDensity = backgroundUniforms.uDensity.value;
-    stats.backgroundScale = backgroundUniforms.uBaseScale.value;
-    stats.backgroundOpacity = backgroundUniforms.uOpacity.value;
-    stats.backgroundNebulaStrength = backgroundUniforms.uNebulaStrength.value;
-    stats.backgroundNebulaExposure = backgroundUniforms.uNebulaExposure.value;
-    stats.backgroundLightIntensity = backgroundUniforms.uLightIntensity.value;
-    stats.backgroundOctaves = backgroundUniforms.uOctaves.value;
-    stats.backgroundTargetType = targetManager.backgroundTargetTypeLabel;
-    stats.backgroundTargetColorSpace = targetManager.backgroundTargetColorSpace;
-    stats.backgroundTargetBytesPerPixel = targetManager.backgroundTargetBytesPerPixel;
-    stats.backgroundHdrEnabled = targetManager.backgroundHdrEnabled;
-    stats.backgroundHdrFallback = !targetManager.backgroundHdrEnabled;
-  }
-
   function syncOverlayStats(): void {
     Object.assign(stats, starLayers.collectStats());
-    syncBackgroundStats();
+    Object.assign(stats, nebulaLayer.collectStats());
     stats.bakedStarLayerEnabled = layerState.bakedStars.enabled;
     stats.bakedStarLayerDrawCalls = layerState.bakedStars.enabled ? patchDescriptors.length : 0;
     stats.bakedStarLayerRadius = layerState.bakedStars.radius;
@@ -878,12 +675,12 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     if (descriptors.length > 0) {
       pipeline.scheduleLayerBakeJobs(descriptors, "screen");
     }
-    backgroundPipeline.markPatchDescriptorsStale("screen");
-    backgroundPipeline.scheduleBake(CAMERA_BAKE_IDLE_MS);
+    nebulaLayer.markStale("screen");
+    nebulaLayer.scheduleBake(CAMERA_BAKE_IDLE_MS);
   }
 
   function rebuildDisplayGeometry(): void {
-    backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
+    nebulaLayer.setSphereSegments(currentSphereSegments);
     skydome.rebuildBakedDomeMeshes(patchDescriptors);
     starLayers.setSphereSegments(currentSphereSegments);
     syncOverlayStats();
@@ -912,21 +709,16 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     }
 
     const previousDescriptors = patchDescriptors;
-    const previousBackgroundDescriptors = backgroundPatchDescriptors;
     pipeline.clearBakeQueue();
-    backgroundPipeline.clearBakeQueue();
+    nebulaLayer.clearBakeQueue();
     currentPatchLayout = nextLayout;
     patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
-    backgroundPatchDescriptors = createBackgroundPatchDescriptors(currentPatchLayout);
     currentSupersample = currentPatchLayout.supersample ?? 1;
     pendingDisplaySwap = null;
     skydome.disposeBakedDomeMeshes();
-    backgroundSkydome.disposeBakedDomeMeshes();
     disposePatchDescriptors(previousDescriptors, { releaseTargets: false });
-    disposePatchDescriptors(previousBackgroundDescriptors, { releaseTargets: false, skydomeManager: backgroundSkydome });
     skydome.rebuildBakedDomeMeshes(patchDescriptors);
-    backgroundSkydome.rebuildBakedDomeMeshes(backgroundPatchDescriptors);
-    backgroundSkydome.setVisible(layerState.skyBackground.enabled);
+    nebulaLayer.setLayout(currentPatchLayout, { bake: false, reason });
     stats.autoLayoutReason = nextLayout.autoLayoutReason ?? reason;
     stats.pendingAutoLayout = false;
     updatePatchStats();
@@ -934,7 +726,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     notifyReadouts();
     if (bake) {
       pipeline.bakeNow();
-      backgroundPipeline.bakeNow();
+      nebulaLayer.bakeNow();
     }
     return true;
   }
@@ -996,7 +788,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     });
   }
 
-  function setLayerParamValue(layerId: LayerId, key: string, value: number): boolean {
+  function setLayerParamValue(layerId: keyof StarfieldLayerState, key: string, value: number): boolean {
     const layer = layerState[layerId];
     if (!layer?.params || !layer?.uniforms?.[key]) return false;
     layer.params[key] = value;
@@ -1006,23 +798,14 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
 
   function setLayerParam(layerId: LayerId, key: string, value: number, delay = 180): void {
     const nextValue = Number(value);
-    if (!Number.isFinite(nextValue) || !setLayerParamValue(layerId, key, nextValue)) return;
-
     if (layerId === "skyBackground") {
-      if (key === "uNebulaExposure") {
-        backgroundSkydome.setMaterialUniformValue("uNebulaExposure", nextValue);
+      if (Number.isFinite(nextValue) && nebulaLayer.setParam(key, nextValue, delay)) {
         syncOverlayStats();
-        notifyReadouts();
-        requestRender();
-        return;
       }
-      backgroundPipeline.markPatchDescriptorsStale("background");
-      backgroundPipeline.scheduleBake(delay);
-      syncOverlayStats();
-      notifyReadouts();
-      requestRender();
       return;
     }
+
+    if (!Number.isFinite(nextValue) || !setLayerParamValue(layerId, key, nextValue)) return;
 
     if (layerId === "bakedStars") {
       if (CATALOG_PARAMS.has(key)) {
@@ -1065,11 +848,15 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   }
 
   function getLayerParam(layerId: LayerId, key: string): number {
+    if (layerId === "skyBackground") {
+      return nebulaLayer.getParam(key);
+    }
     const value = layerState[layerId]?.params?.[key];
     return typeof value === "number" ? value : 0;
   }
 
   function reseedLayer(layerId: LayerId): number {
+    if (layerId === "skyBackground") return 0;
     if (!layerState[layerId]?.params) return 0;
     const nextSeed = Math.floor(Math.random() * 1001);
     setLayerParam(layerId, "uSeed", nextSeed, 0);
@@ -1086,8 +873,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     const nextEnabled = Boolean(enabled);
 
     if (layerId === "skyBackground") {
-      layerState.skyBackground.enabled = nextEnabled;
-      backgroundSkydome.setVisible(nextEnabled);
+      nebulaLayer.setEnabled(nextEnabled);
     } else if (layerId === "bakedStars") {
       layerState.bakedStars.enabled = nextEnabled;
       skydome.setVisible(nextEnabled);
@@ -1104,21 +890,27 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   }
 
   function getLayerEnabled(layerId: LayerId): boolean {
+    if (layerId === "skyBackground") {
+      return nebulaLayer.getEnabled();
+    }
     return Boolean(layerState[layerId]?.enabled);
   }
 
   function setLayerRadius(layerId: LayerId, value: number): void {
     const nextRadius = Number(value);
-    if (!Number.isFinite(nextRadius) || nextRadius <= 0 || !layerState[layerId]) return;
-
-    layerState[layerId].radius = nextRadius;
+    if (!Number.isFinite(nextRadius) || nextRadius <= 0) return;
 
     if (layerId === "skyBackground") {
-      backgroundSkydome.setRadius(nextRadius, backgroundPatchDescriptors);
+      nebulaLayer.setRadius(nextRadius);
+      return;
     } else if (layerId === "bakedStars") {
+      layerState.bakedStars.radius = nextRadius;
       skydome.setRadius(nextRadius, patchDescriptors);
     } else if (layerId === "brightOverlay") {
+      layerState.brightOverlay.radius = nextRadius;
       starLayers.setLayerRadius("brightOverlay", nextRadius);
+    } else {
+      return;
     }
 
     syncOverlayStats();
@@ -1127,6 +919,9 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   }
 
   function getLayerRadius(layerId: LayerId): number {
+    if (layerId === "skyBackground") {
+      return nebulaLayer.getRadius();
+    }
     return layerState[layerId]?.radius ?? 0;
   }
 
@@ -1215,9 +1010,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   function recordRender(): void {
     stats.renders = Number(stats.renders ?? 0) + 1;
     starLayers.advanceRuntime();
-    if (backgroundSkydome.activeBlendCount > 0 && backgroundSkydome.advancePatchBlends()) {
-      requestRender();
-    }
+    nebulaLayer.recordRender();
     if (skydome.activeBlendCount > 0 && skydome.advancePatchBlends()) {
       requestRender();
     }
@@ -1225,12 +1018,12 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
 
   function bakeNow(): void {
     pipeline.bakeNow();
-    backgroundPipeline.bakeNow();
+    nebulaLayer.bakeNow();
   }
 
   function scheduleBake(delay = 180): void {
     pipeline.scheduleBake(delay);
-    backgroundPipeline.scheduleBake(delay);
+    nebulaLayer.scheduleBake(delay);
   }
 
   function collectStats(rendererInfo: RendererInfoLike, cameraInfo: Partial<CameraInfo> = {}, options: { detail?: "panel" | "debug" } = {}) {
@@ -1240,25 +1033,20 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   function dispose(): void {
     clearTimeout(autoLayoutTimer);
     pipeline.clearBakeQueue();
-    backgroundPipeline.clearBakeQueue();
+    nebulaLayer.clearBakeQueue();
     if (pendingDisplaySwap) {
       disposePatchDescriptors(pendingDisplaySwap.previousDescriptors, { releaseTargets: false });
       pendingDisplaySwap = null;
     }
     disposePatchDescriptors(patchDescriptors, { releaseTargets: false });
-    disposePatchDescriptors(backgroundPatchDescriptors, { releaseTargets: false, skydomeManager: backgroundSkydome });
     targetManager.disposeTargetPool();
-    backgroundPipeline.dispose();
-    backgroundSkydome.dispose();
+    nebulaLayer.dispose();
     skydome.dispose();
     supersampleTarget.dispose();
     starGeometry.dispose();
     starMaterial.dispose();
     starLayers.dispose();
     fallbackPatchTexture.dispose();
-    fallbackBackgroundTexture.dispose();
-    backgroundBakeQuad.geometry.dispose();
-    backgroundBakeMaterial.dispose();
     downsampleQuad.geometry.dispose();
     downsampleMaterial.dispose();
   }
