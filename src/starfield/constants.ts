@@ -1,50 +1,45 @@
 import * as THREE from "three/webgpu";
+import {
+  CATALOG_PARAM_KEYS,
+  REFERENCE_BAKE_HEIGHT,
+  STARFIELD_ALLOCATION_BUDGET_BYTES,
+  STARFIELD_CONFIG,
+} from "../config";
 import type { CameraInfo, StarClassStats } from "./types";
 
-export const DOME_RADIUS = 10;
-export const SKYDOME_SPHERE_SEGMENTS = 32;
-export const REFERENCE_BAKE_WIDTH = 4096;
-export const REFERENCE_BAKE_HEIGHT = REFERENCE_BAKE_WIDTH / 2;
-export const MAX_AUTO_SUPERSAMPLE = 8;
-export const STARFIELD_ALLOCATION_BUDGET_MIB = 1024;
-const BYTES_PER_MIB = 1024 * 1024;
-export const STARFIELD_ALLOCATION_BUDGET_BYTES = STARFIELD_ALLOCATION_BUDGET_MIB * BYTES_PER_MIB;
-export const PATCH_SIZE_ALIGNMENT = 128;
-export const PATCH_GUARD_TEXELS = 64;
-export const MIN_CORE_PIXELS = 1.75;
-export const MIN_GLARE_PIXELS = 3.25;
-export const SUBPIXEL_DENSITY_THRESHOLD_PX = 1;
-export const AA_PIN_THRESHOLD_PX = 1.5;
-export const GAUSSIAN_CUTOFF_SIGMA = 8.0;
-export const STAR_SIZE_MIN_SCALE = 0.1;
-export const STAR_SIZE_RARITY_EXPONENT = 5.0;
-export const STAR_SIZE_GATE_EXPONENT = 12.0;
-export const STAR_SIZE_BRIGHTNESS_LINK = 0.35;
-export const STAR_SIZE_GLARE_LINK = 0.25;
-export const STAR_CATALOG_BASE_DENSITY = 1000;
-export const DEFAULT_LARGE_STAR_RARITY = 0.5;
-export const BRIGHT_STAR_OVERLAY_ENABLED = true;
-export const BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS = false;
-export const BRIGHT_STAR_OVERLAY_STRENGTH = 0.38;
-const BRIGHT_STAR_OVERLAY_RADIUS_SCALE = 0.985;
-export const WINKLE_MAX_COUNT = 128;
-export const DEFAULT_WINKLE_AMOUNT = 1;
-export const DEFAULT_WINKLE_SHARPNESS = 0.65;
-export const DEFAULT_WINKLE_FLASHINESS = 0.65;
-export const DEFAULT_EFFECT_MIN_SIZE = 0;
-export const DEFAULT_EFFECT_MAX_SIZE = 0.75;
-export const DEFAULT_BAKED_STAR_RADIUS = DOME_RADIUS;
-export const DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS = DOME_RADIUS * BRIGHT_STAR_OVERLAY_RADIUS_SCALE;
-export const MAX_BAKE_JOBS_PER_FRAME = 1;
-export const CAMERA_BAKE_IDLE_MS = 450;
-export const PATCH_CROSSFADE_MS = 260;
-export const CATALOG_PARAMS = new Set<string>(["uDensity", "uSeed"]);
-export const DENSITY_FALLBACK_STARS_PER_PIXEL = 0.25;
-export const BRIGHT_STAR_FRACTION = 0.1;
-export const AUTO_PATCH_GRIDS = [1, 2, 4, 8, 16];
-export const BASE_TARGET_POOL_BUCKETS = [128, 256, 512, 1024, 2048, 4096];
-export const FINAL_TEXTURE_BYTES_PER_PIXEL = 4;
-export const HDR_TEXTURE_BYTES_PER_PIXEL = 8;
+export const DOME_RADIUS = STARFIELD_CONFIG.internal.domeRadius;
+export const SKYDOME_SPHERE_SEGMENTS = STARFIELD_CONFIG.internal.skydomeSphereSegments;
+export const REFERENCE_BAKE_WIDTH = STARFIELD_CONFIG.internal.referenceBakeWidth;
+export { REFERENCE_BAKE_HEIGHT, STARFIELD_ALLOCATION_BUDGET_BYTES };
+export const MAX_AUTO_SUPERSAMPLE = STARFIELD_CONFIG.internal.maxAutoSupersample;
+export const STARFIELD_ALLOCATION_BUDGET_MIB = STARFIELD_CONFIG.internal.allocationBudgetMiB;
+export const PATCH_SIZE_ALIGNMENT = STARFIELD_CONFIG.internal.patchSizeAlignment;
+export const PATCH_GUARD_TEXELS = STARFIELD_CONFIG.internal.patchGuardTexels;
+export const MIN_CORE_PIXELS = STARFIELD_CONFIG.internal.minCorePixels;
+export const MIN_GLARE_PIXELS = STARFIELD_CONFIG.internal.minGlarePixels;
+export const SUBPIXEL_DENSITY_THRESHOLD_PX = STARFIELD_CONFIG.internal.subpixelDensityThresholdPx;
+export const AA_PIN_THRESHOLD_PX = STARFIELD_CONFIG.internal.aaPinThresholdPx;
+export const GAUSSIAN_CUTOFF_SIGMA = STARFIELD_CONFIG.internal.gaussianCutoffSigma;
+export const STAR_SIZE_MIN_SCALE = STARFIELD_CONFIG.internal.starSizeMinScale;
+export const STAR_SIZE_RARITY_EXPONENT = STARFIELD_CONFIG.internal.starSizeRarityExponent;
+export const STAR_SIZE_GATE_EXPONENT = STARFIELD_CONFIG.internal.starSizeGateExponent;
+export const STAR_SIZE_BRIGHTNESS_LINK = STARFIELD_CONFIG.internal.starSizeBrightnessLink;
+export const STAR_SIZE_GLARE_LINK = STARFIELD_CONFIG.internal.starSizeGlareLink;
+export const STAR_CATALOG_BASE_DENSITY = STARFIELD_CONFIG.internal.starCatalogBaseDensity;
+export const BRIGHT_STAR_OVERLAY_ENABLED = STARFIELD_CONFIG.internal.brightStarOverlayEnabled;
+export const BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS = STARFIELD_CONFIG.internal.brightStarOverlayExcludesBakedStars;
+export const BRIGHT_STAR_OVERLAY_STRENGTH = STARFIELD_CONFIG.internal.brightStarOverlayStrength;
+export const WINKLE_MAX_COUNT = STARFIELD_CONFIG.internal.winkleMaxCount;
+export const MAX_BAKE_JOBS_PER_FRAME = STARFIELD_CONFIG.internal.maxBakeJobsPerFrame;
+export const CAMERA_BAKE_IDLE_MS = STARFIELD_CONFIG.internal.cameraBakeIdleMs;
+export const PATCH_CROSSFADE_MS = STARFIELD_CONFIG.internal.patchCrossfadeMs;
+export const CATALOG_PARAMS = CATALOG_PARAM_KEYS;
+export const DENSITY_FALLBACK_STARS_PER_PIXEL = STARFIELD_CONFIG.internal.densityFallbackStarsPerPixel;
+export const BRIGHT_STAR_FRACTION = STARFIELD_CONFIG.internal.brightStarFraction;
+export const AUTO_PATCH_GRIDS = STARFIELD_CONFIG.internal.autoPatchGrids;
+export const BASE_TARGET_POOL_BUCKETS = STARFIELD_CONFIG.internal.baseTargetPoolBuckets;
+export const FINAL_TEXTURE_BYTES_PER_PIXEL = STARFIELD_CONFIG.internal.finalTextureBytesPerPixel;
+export const HDR_TEXTURE_BYTES_PER_PIXEL = STARFIELD_CONFIG.internal.hdrTextureBytesPerPixel;
 
 export const STAR_CLASSES = Object.freeze({
   TINY: 0,

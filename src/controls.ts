@@ -1,6 +1,7 @@
+import { STARFIELD_CONFIG } from "./config";
 import type { GpuStarfieldApi, GpuStarfieldParams, StarfieldStats } from "./starfield/types";
 
-const GPU_FIELD_LAYER_ID = "gpuField";
+const GPU_FIELD_LAYER_ID = STARFIELD_CONFIG.gpuField.id;
 
 type ControlValue = number | boolean;
 type RangeFormatFn = (value: number) => string;
@@ -64,8 +65,8 @@ interface LayerParamState {
 }
 
 interface StarfieldControlApi {
-  defaults: Record<string, unknown>;
   setLayerRadius(layerId: StarfieldControlLayerId, value: number): void;
+  getLayerRadius(layerId: StarfieldControlLayerId): number;
   getLayerEnabled(layerId: StarfieldControlLayerId): boolean;
   setLayerEnabled(layerId: StarfieldControlLayerId, enabled: boolean): void;
   getLayerParam(layerId: StarfieldControlLayerId, key: string): ControlValue;
@@ -122,7 +123,7 @@ const STAR_LAYER_CONTROLS: LayerControl[] = [
 
 const LAYER_TABS: LayerTabConfig[] = [
   {
-    id: "skyBackground",
+    id: STARFIELD_CONFIG.background.id,
     label: "Background",
     controls: [
       { type: "toggle", key: "skyBackgroundEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
@@ -148,7 +149,7 @@ const LAYER_TABS: LayerTabConfig[] = [
     ],
   },
   {
-    id: "bakedStars",
+    id: STARFIELD_CONFIG.baked.id,
     label: "Baked",
     controls: [
       { type: "toggle", key: "bakedStarsEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
@@ -172,7 +173,7 @@ const LAYER_TABS: LayerTabConfig[] = [
     ],
   },
   {
-    id: "brightOverlay",
+    id: STARFIELD_CONFIG.overlay.id,
     label: "Overlay",
     controls: [
       { type: "toggle", key: "brightOverlayEnabled", label: "Enabled", format: (v) => (v ? "On" : "Off") },
@@ -447,7 +448,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
   const collapsedStatsGroups = new Set<string>();
   const layerToggleInputs = new Map<string, LayerToggleState>();
   const layerParamInputs = new Map<string, LayerParamState>();
-  let activeLayerId: ControlLayerId = "bakedStars";
+  let activeLayerId: ControlLayerId = STARFIELD_CONFIG.baked.id;
 
   function isGpuFieldLayer(layer: string): layer is typeof GPU_FIELD_LAYER_ID {
     return layer === GPU_FIELD_LAYER_ID;
@@ -477,9 +478,9 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     starfield.setLayerParam(layer, key, value, delay);
   }
 
-  function getLayerDefault(layer: ControlLayerId, key: string): ControlValue {
-    const value = isGpuFieldLayer(layer) ? gpuStarfield.defaults[key as keyof GpuStarfieldParams] : starfield.defaults[key];
-    return typeof value === "number" || typeof value === "boolean" ? value : 0;
+  function getLayerRadius(layer: ControlLayerId): number {
+    if (isGpuFieldLayer(layer)) return 0;
+    return starfield.getLayerRadius(layer);
   }
 
   function isUxVisible(): boolean {
@@ -601,7 +602,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     const input = document.createElement("input");
     input.id = `control-${layer}-${control.key}`;
     input.type = "checkbox";
-    input.checked = Boolean(getLayerDefault(layer, control.key));
+    input.checked = getLayerEnabled(layer);
     label.htmlFor = input.id;
     layerToggleInputs.set(layer, { input, value, format: control.format });
 
@@ -652,7 +653,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     input.min = String(control.min);
     input.max = String(control.max);
     input.step = String(control.step);
-    input.value = String(control.param ? getLayerParam(layer, control.key) : getLayerDefault(layer, control.key));
+    input.value = String(control.param ? getLayerParam(layer, control.key) : getLayerRadius(layer));
     label.htmlFor = input.id;
     if (control.param) {
       layerParamInputs.set(`${layer}:${control.key}`, {
@@ -882,7 +883,12 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
   window.printStarfieldGpuStats = printGpuStats;
 
   buildPanel();
-  const layerIds: ControlLayerId[] = ["skyBackground", "bakedStars", GPU_FIELD_LAYER_ID, "brightOverlay"];
+  const layerIds: ControlLayerId[] = [
+    STARFIELD_CONFIG.background.id,
+    STARFIELD_CONFIG.baked.id,
+    GPU_FIELD_LAYER_ID,
+    STARFIELD_CONFIG.overlay.id,
+  ];
   layerIds.forEach(syncLayerToggle);
   setOverlayButtonState(starfield.getLayerEnabled("brightOverlay"));
   syncSeedButtonState();

@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { cloneGpuFieldParams } from "./config";
 import {
   Fn,
   Discard,
@@ -46,17 +47,6 @@ const BASE_QUAD_POSITIONS = new Float32Array([
   1, 1, 0,
   -1, 1, 0,
 ]);
-
-const DEFAULTS: GpuStarfieldParams = Object.freeze({
-  enabled: true,
-  starCount: 10000,
-  fieldRadius: 14,
-  depthFade: 0.45,
-  travelSpeed: 1,
-  starSize: 5,
-  brightness: 1,
-  colorVariance: 1,
-});
 
 function mixUint32(value: number): number {
   let state = value >>> 0;
@@ -225,7 +215,7 @@ export function createGpuStarfield({
   scene: THREE.Scene;
   requestRender?: RequestRender;
 }): GpuStarfieldApi {
-  const params: GpuStarfieldParams = { ...DEFAULTS };
+  const params: GpuStarfieldParams = cloneGpuFieldParams();
   const virtualPosition = new THREE.Vector3();
   let cameraForward = new THREE.Vector3(0, 0, -1);
   let geometryRebuilds = 0;
@@ -364,7 +354,6 @@ export function createGpuStarfield({
   }
 
   return {
-    defaults: DEFAULTS,
     setEnabled,
     getEnabled: () => params.enabled,
     setParam,

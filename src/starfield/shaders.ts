@@ -78,6 +78,28 @@ function directionToEquirectUv(direction: any): any {
   return vec2(u, v);
 }
 
+function intervalError(value: any, intervalSize: any): any {
+  return max(max(value.negate(), value.sub(intervalSize)), 0.0);
+}
+
+function wrappedIntervalOffset(skyU: any, intervalMinU: any, intervalSizeU: any): any {
+  const d0 = skyU.sub(intervalMinU);
+  const d1 = d0.add(1.0);
+  const d2 = d0.sub(1.0);
+  const e0 = intervalError(d0, intervalSizeU);
+  const e1 = intervalError(d1, intervalSizeU);
+  const e2 = intervalError(d2, intervalSizeU);
+  return (select as any)(
+    e1.lessThan(e0).and(e1.lessThanEqual(e2)),
+    d1,
+    (select as any)(e2.lessThan(e0).and(e2.lessThan(e1)), d2, d0),
+  );
+}
+
+function storageLocalU(skyU: any, storageMinU: any, storageSizeU: any): any {
+  return wrappedIntervalOffset(skyU, storageMinU, storageSizeU).div(storageSizeU);
+}
+
 function createPatchNodeMaterial({
   uniforms,
 }: {
@@ -92,6 +114,10 @@ function createPatchNodeMaterial({
   const uCurrentInnerScale = patchVectorUniform(uniforms.uCurrentInnerScale.value as THREE.Vector2) as any;
   const uNextInnerOffset = patchVectorUniform(uniforms.uNextInnerOffset.value as THREE.Vector2) as any;
   const uNextInnerScale = patchVectorUniform(uniforms.uNextInnerScale.value as THREE.Vector2) as any;
+  const uCurrentStorageUvMin = patchVectorUniform(uniforms.uCurrentStorageUvMin.value as THREE.Vector2) as any;
+  const uCurrentStorageUvSize = patchVectorUniform(uniforms.uCurrentStorageUvSize.value as THREE.Vector2) as any;
+  const uNextStorageUvMin = patchVectorUniform(uniforms.uNextStorageUvMin.value as THREE.Vector2) as any;
+  const uNextStorageUvSize = patchVectorUniform(uniforms.uNextStorageUvSize.value as THREE.Vector2) as any;
   uniforms.uCurrentTexture = uCurrentTexture as unknown as UniformMap[string];
   uniforms.uNextTexture = uNextTexture as unknown as UniformMap[string];
   uniforms.uBlend = uBlend as unknown as UniformMap[string];
@@ -101,6 +127,10 @@ function createPatchNodeMaterial({
   uniforms.uCurrentInnerScale = uCurrentInnerScale as unknown as UniformMap[string];
   uniforms.uNextInnerOffset = uNextInnerOffset as unknown as UniformMap[string];
   uniforms.uNextInnerScale = uNextInnerScale as unknown as UniformMap[string];
+  uniforms.uCurrentStorageUvMin = uCurrentStorageUvMin as unknown as UniformMap[string];
+  uniforms.uCurrentStorageUvSize = uCurrentStorageUvSize as unknown as UniformMap[string];
+  uniforms.uNextStorageUvMin = uNextStorageUvMin as unknown as UniformMap[string];
+  uniforms.uNextStorageUvSize = uNextStorageUvSize as unknown as UniformMap[string];
 
   const vDirection = varyingProperty("vec3", "vStarPatchDirection") as any;
   const material = new THREE.MeshBasicNodeMaterial({
@@ -125,13 +155,54 @@ function createPatchNodeMaterial({
   })();
   material.colorNode = Fn(() => {
     const skyUv = directionToEquirectUv(vDirection);
-    const localUv = skyUv.sub(uContentUvMin).div(uContentUvSize);
-    const clampedLocalUv = clamp(localUv, 0.0, 1.0);
-    const currentPatchUv = uCurrentInnerOffset.add(clampedLocalUv.mul(uCurrentInnerScale));
-    const nextPatchUv = uNextInnerOffset.add(clampedLocalUv.mul(uNextInnerScale));
+    const contentLocalUv = vec2(
+      wrappedIntervalOffset(skyUv.x, uContentUvMin.x, uContentUvSize.x).div(uContentUvSize.x),
+      skyUv.y.sub(uContentUvMin.y).div(uContentUvSize.y),
+    );
+    const currentPatchUv = clamp(vec2(
+      storageLocalU(skyUv.x, uCurrentStorageUvMin.x, uCurrentStorageUvSize.x),
+      skyUv.y.sub(uCurrentStorageUvMin.y).div(uCurrentStorageUvSize.y),
+    ), 0.0, 1.0);
+    const nextPatchUv = clamp(vec2(
+      storageLocalU(skyUv.x, uNextStorageUvMin.x, uNextStorageUvSize.x),
+      skyUv.y.sub(uNextStorageUvMin.y).div(uNextStorageUvSize.y),
+    ), 0.0, 1.0);
+
+    const guardFrac = (max as any)(
+      uCurrentStorageUvSize.sub(uContentUvSize).div(uContentUvSize.mul(2.0)),
+      vec2(0.0),
+    );
+    const safeGuardFrac = (max as any)(guardFrac, vec2(1e-6));
+    const leftOwner = smoothstep(safeGuardFrac.x.negate(), safeGuardFrac.x, contentLocalUv.x);
+    const rightOwner = float(1.0).sub(smoothstep(float(1.0).sub(safeGuardFrac.x), float(1.0).add(safeGuardFrac.x), contentLocalUv.x));
+    const horizontalOwner = (select as any)(
+      guardFrac.x.lessThanEqual(0.0),
+      1.0,
+      leftOwner.mul(rightOwner),
+    );
+
+    const hasTopNeighbor = uContentUvMin.y.greaterThan(0.0);
+    const contentBottom = uContentUvMin.y.add(uContentUvSize.y);
+    const hasBottomNeighbor = contentBottom.lessThan(1.0);
+    const topOwner = (select as any)(
+      hasTopNeighbor,
+      smoothstep(safeGuardFrac.y.negate(), safeGuardFrac.y, contentLocalUv.y),
+      1.0,
+    );
+    const bottomOwner = (select as any)(
+      hasBottomNeighbor,
+      float(1.0).sub(smoothstep(float(1.0).sub(safeGuardFrac.y), float(1.0).add(safeGuardFrac.y), contentLocalUv.y)),
+      1.0,
+    );
+    const verticalOwner = (select as any)(
+      guardFrac.y.lessThanEqual(0.0),
+      1.0,
+      topOwner.mul(bottomOwner),
+    );
+    const ownership = clamp(horizontalOwner.mul(verticalOwner), 0.0, 1.0);
     const currentColor = texture(uCurrentTexture, currentPatchUv);
     const nextColor = texture(uNextTexture, nextPatchUv);
-    return mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0));
+    return mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0)).mul(ownership);
   })();
 
   return material;
@@ -669,6 +740,8 @@ export function createPatchDomeMaterial({
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
     innerScale: descriptor.innerScale,
+    storageUvMin: descriptor.storageUvMin,
+    storageUvSize: descriptor.storageUvSize,
   };
 
   return createPatchNodeMaterial({
@@ -682,6 +755,10 @@ export function createPatchDomeMaterial({
       uCurrentInnerScale: { value: sampling.innerScale.clone() },
       uNextInnerOffset: { value: sampling.innerOffset.clone() },
       uNextInnerScale: { value: sampling.innerScale.clone() },
+      uCurrentStorageUvMin: { value: sampling.storageUvMin.clone() },
+      uCurrentStorageUvSize: { value: sampling.storageUvSize.clone() },
+      uNextStorageUvMin: { value: sampling.storageUvMin.clone() },
+      uNextStorageUvSize: { value: sampling.storageUvSize.clone() },
     },
   });
 }

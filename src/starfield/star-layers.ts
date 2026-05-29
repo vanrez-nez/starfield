@@ -1,8 +1,7 @@
 import * as THREE from "three/webgpu";
+import { STARFIELD_CONFIG } from "../config";
 import {
   BRIGHT_STAR_OVERLAY_STRENGTH,
-  DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
-  DEFAULT_WINKLE_AMOUNT,
   WINKLE_MAX_COUNT,
 } from "./constants";
 import {
@@ -102,10 +101,10 @@ export function createStarLayerManager({
   scene,
   overlayUniforms,
   requestRender,
-  overlayRadius = DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
+  overlayRadius = STARFIELD_CONFIG.overlay.radius,
 }: StarLayerManagerArgs) {
   const layers = new Map<string, RuntimeStarLayer>();
-  let currentOverlayRadius = Number.isFinite(overlayRadius) ? overlayRadius : DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS;
+  let currentOverlayRadius = Number.isFinite(overlayRadius) ? overlayRadius : STARFIELD_CONFIG.overlay.radius;
   let brightOverlayEnabled = false;
   let brightOverlayStats: StarfieldStats = {
     overlayEnabled: false,
@@ -115,7 +114,7 @@ export function createStarLayerManager({
     overlayDrawCalls: 0,
   };
   let currentWinkleAmount = THREE.MathUtils.clamp(
-    overlayUniforms.uWinkleAmount?.value ?? DEFAULT_WINKLE_AMOUNT,
+    overlayUniforms.uWinkleAmount?.value ?? STARFIELD_CONFIG.overlay.params.uWinkleAmount,
     0,
     1,
   );

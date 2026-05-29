@@ -362,7 +362,6 @@ export interface StarLayerParams {
 }
 
 export interface GpuStarfieldApi {
-  defaults: GpuStarfieldParams;
   setEnabled(enabled: boolean): void;
   getEnabled(): boolean;
   setParam(key: keyof GpuStarfieldParams, value: number | boolean): void;

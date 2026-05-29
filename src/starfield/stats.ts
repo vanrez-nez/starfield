@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { STARFIELD_CONFIG } from "../config";
 import {
   DENSITY_FALLBACK_STARS_PER_PIXEL,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
@@ -17,10 +18,6 @@ import {
   STARFIELD_ALLOCATION_BUDGET_BYTES,
   STARFIELD_ALLOCATION_BUDGET_MIB,
   WINKLE_MAX_COUNT,
-  DEFAULT_EFFECT_MAX_SIZE,
-  DEFAULT_EFFECT_MIN_SIZE,
-  DEFAULT_WINKLE_SHARPNESS,
-  DEFAULT_WINKLE_FLASHINESS,
   sizeLabel,
   sphereVerticalSegmentsFor,
 } from "./constants";
@@ -45,32 +42,8 @@ import type {
   StarfieldStats,
 } from "./types";
 
-interface InitialStatsDefaults {
-  skyBackgroundRadius: number;
-  bakedStarsRadius: number;
-  brightOverlayRadius: number;
-  uDensity: number;
-  uSeed: number;
-  uWinkleAmount?: number;
-  uEffectMinSize?: number;
-  uEffectMaxSize?: number;
-  uWinkleSharpness?: number;
-  uWinkleFlashiness?: number;
-  backgroundParams?: {
-    uSeed?: number;
-    uCoverage?: number;
-    uDensity?: number;
-    uBaseScale?: number;
-    uOpacity?: number;
-    uNebulaStrength?: number;
-    uNebulaExposure?: number;
-    uLightIntensity?: number;
-  };
-}
-
 interface InitialStatsArgs {
-  defaults: InitialStatsDefaults;
-  defaultPatchLayout: PatchLayout;
+  initialPatchLayout: PatchLayout;
   supersample: number;
   maxTextureSize: number;
   accumulationTypeLabel: string;
@@ -111,19 +84,19 @@ interface StatsContext {
 }
 
 export function createInitialStats({
-  defaults,
-  defaultPatchLayout,
+  initialPatchLayout,
   supersample,
   maxTextureSize,
   accumulationTypeLabel,
   sphereSegments,
 }: InitialStatsArgs): StarfieldStats {
+  const { background, baked, overlay } = STARFIELD_CONFIG;
   return {
     mode: "baked-equirect-skydome-tiled-catalog-splat",
     bakes: 0,
     renders: 0,
-    textureWidth: defaultPatchLayout.virtualWidth,
-    textureHeight: defaultPatchLayout.virtualHeight,
+    textureWidth: initialPatchLayout.virtualWidth,
+    textureHeight: initialPatchLayout.virtualHeight,
     supersampleMode: "auto",
     horizontalFov: 0,
     verticalFov: 0,
@@ -134,59 +107,59 @@ export function createInitialStats({
     allocationBudgetMemory: formatBytes(STARFIELD_ALLOCATION_BUDGET_BYTES),
     allocationBudgetMiB: STARFIELD_ALLOCATION_BUDGET_MIB,
     accumulationType: accumulationTypeLabel,
-    patchGrid: patchGridLabel(defaultPatchLayout),
-    autoPatchGrid: patchGridLabel(defaultPatchLayout),
-    autoVirtualSize: sizeLabel(defaultPatchLayout.virtualWidth, defaultPatchLayout.virtualHeight),
-    autoLayoutReason: defaultPatchLayout.autoLayoutReason ?? "initial",
+    patchGrid: patchGridLabel(initialPatchLayout),
+    autoPatchGrid: patchGridLabel(initialPatchLayout),
+    autoVirtualSize: sizeLabel(initialPatchLayout.virtualWidth, initialPatchLayout.virtualHeight),
+    autoLayoutReason: initialPatchLayout.autoLayoutReason ?? "initial",
     catalogDirty: true,
-    patchWidth: defaultPatchLayout.contentWidth,
-    patchHeight: defaultPatchLayout.contentHeight,
-    patchStorageWidth: defaultPatchLayout.storageWidth,
-    patchStorageHeight: defaultPatchLayout.storageHeight,
-    patchGuard: defaultPatchLayout.guard,
+    patchWidth: initialPatchLayout.contentWidth,
+    patchHeight: initialPatchLayout.contentHeight,
+    patchStorageWidth: initialPatchLayout.storageWidth,
+    patchStorageHeight: initialPatchLayout.storageHeight,
+    patchGuard: initialPatchLayout.guard,
     starCount: 0,
     starInstances: 0,
     ...emptyStarClassStats(),
     referenceWidth: REFERENCE_BAKE_WIDTH,
     referenceHeight: REFERENCE_BAKE_HEIGHT,
-    internalWidth: defaultPatchLayout.storageWidth * supersample,
-    internalHeight: defaultPatchLayout.storageHeight * supersample,
+    internalWidth: initialPatchLayout.storageWidth * supersample,
+    internalHeight: initialPatchLayout.storageHeight * supersample,
     sphereSegments,
     sphereVerticalSegments: sphereVerticalSegmentsFor(sphereSegments),
     backgroundLayerEnabled: true,
     backgroundLayerDrawCalls: 1,
     backgroundLayerTriangles: 0,
-    backgroundLayerRadius: defaults.skyBackgroundRadius,
-    backgroundSeed: defaults.backgroundParams?.uSeed ?? 0,
-    backgroundCoverage: defaults.backgroundParams?.uCoverage ?? 0,
-    backgroundDensity: defaults.backgroundParams?.uDensity ?? 0,
-    backgroundScale: defaults.backgroundParams?.uBaseScale ?? 0,
-    backgroundOpacity: defaults.backgroundParams?.uOpacity ?? 0,
-    backgroundNebulaStrength: defaults.backgroundParams?.uNebulaStrength ?? 0,
-    backgroundNebulaExposure: defaults.backgroundParams?.uNebulaExposure ?? 0,
-    backgroundLightIntensity: defaults.backgroundParams?.uLightIntensity ?? 0,
-    backgroundOctaves: 0,
+    backgroundLayerRadius: background.radius,
+    backgroundSeed: background.params.uSeed,
+    backgroundCoverage: background.params.uCoverage,
+    backgroundDensity: background.params.uDensity,
+    backgroundScale: background.params.uBaseScale,
+    backgroundOpacity: background.params.uOpacity,
+    backgroundNebulaStrength: background.params.uNebulaStrength,
+    backgroundNebulaExposure: background.params.uNebulaExposure,
+    backgroundLightIntensity: background.params.uLightIntensity,
+    backgroundOctaves: background.params.uOctaves,
     backgroundTargetType: "unknown",
     backgroundTargetColorSpace: "unknown",
     backgroundTargetBytesPerPixel: 0,
     backgroundHdrEnabled: false,
     backgroundHdrFallback: true,
     bakedStarLayerEnabled: true,
-    bakedStarLayerDrawCalls: defaultPatchLayout.patchCount,
-    bakedStarLayerRadius: defaults.bakedStarsRadius,
-    bakedStarLayerDensity: defaults.uDensity,
-    bakedStarLayerSeed: defaults.uSeed,
+    bakedStarLayerDrawCalls: initialPatchLayout.patchCount,
+    bakedStarLayerRadius: baked.radius,
+    bakedStarLayerDensity: baked.params.uDensity,
+    bakedStarLayerSeed: baked.params.uSeed,
     bakedStarLayerStarCount: 0,
-    overlayRadius: defaults.brightOverlayRadius,
-    overlayLayerDensity: defaults.uDensity,
-    overlayLayerSeed: defaults.uSeed,
+    overlayRadius: overlay.radius,
+    overlayLayerDensity: overlay.params.uDensity,
+    overlayLayerSeed: overlay.params.uSeed,
     overlayLayerStarCount: 0,
     overlayCatalogDirty: true,
-    winkleAmount: defaults.uWinkleAmount ?? 0,
-    effectMinSize: defaults.uEffectMinSize ?? DEFAULT_EFFECT_MIN_SIZE,
-    effectMaxSize: defaults.uEffectMaxSize ?? DEFAULT_EFFECT_MAX_SIZE,
-    winkleSharpness: defaults.uWinkleSharpness ?? DEFAULT_WINKLE_SHARPNESS,
-    winkleFlashiness: defaults.uWinkleFlashiness ?? DEFAULT_WINKLE_FLASHINESS,
+    winkleAmount: overlay.params.uWinkleAmount,
+    effectMinSize: overlay.params.uEffectMinSize,
+    effectMaxSize: overlay.params.uEffectMaxSize,
+    winkleSharpness: overlay.params.uWinkleSharpness,
+    winkleFlashiness: overlay.params.uWinkleFlashiness,
     winkleMaxCount: WINKLE_MAX_COUNT,
     winkleActiveCount: 0,
     winkleDrawCalls: 0,

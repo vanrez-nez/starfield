@@ -1,5 +1,6 @@
 import * as THREE from "three/webgpu";
-import { NEBULA_MAX_ANCHORS, DEFAULT_FIELD_GRADIENT } from "./constants";
+import { STARFIELD_CONFIG } from "../config";
+import { NEBULA_MAX_ANCHORS } from "./constants";
 import type { FieldGradient, NebulaParams, NebulaUniforms } from "./types";
 
 function vectorFromArray(value: unknown, fallback: [number, number, number] = [0, 0, 0]): THREE.Vector3 {
@@ -15,7 +16,7 @@ function normalizedVectorFromArray(value: unknown, fallback: [number, number, nu
 
 export function applyFieldGradientToUniforms(
   uniforms: NebulaUniforms,
-  gradient: Readonly<FieldGradient> = DEFAULT_FIELD_GRADIENT,
+  gradient: Readonly<FieldGradient> = STARFIELD_CONFIG.background.fieldGradient,
 ): void {
   const anchors = Array.isArray(gradient.anchors) ? gradient.anchors.slice(0, NEBULA_MAX_ANCHORS) : [];
   uniforms.uAnchorCount.value = anchors.length;
@@ -38,7 +39,7 @@ export function applyFieldGradientToUniforms(
 
 export function createNebulaUniforms(
   params: NebulaParams,
-  gradient: Readonly<FieldGradient> = DEFAULT_FIELD_GRADIENT,
+  gradient: Readonly<FieldGradient> = STARFIELD_CONFIG.background.fieldGradient,
 ): NebulaUniforms {
   const uniforms: NebulaUniforms = {
     uTileUvMin: { value: new THREE.Vector2(0, 0) },

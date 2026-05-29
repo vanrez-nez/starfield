@@ -1,18 +1,14 @@
 import * as THREE from "three/webgpu";
 import {
+  STARFIELD_CONFIG,
+  cloneStarLayerParams,
+} from "./config";
+import {
   ALLOCATION_STATES,
   BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
   BRIGHT_STAR_OVERLAY_ENABLED,
   CAMERA_BAKE_IDLE_MS,
   CATALOG_PARAMS,
-  DEFAULT_BAKED_STAR_RADIUS,
-  DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
-  DEFAULT_EFFECT_MAX_SIZE,
-  DEFAULT_EFFECT_MIN_SIZE,
-  DEFAULT_LARGE_STAR_RARITY,
-  DEFAULT_WINKLE_AMOUNT,
-  DEFAULT_WINKLE_FLASHINESS,
-  DEFAULT_WINKLE_SHARPNESS,
   FALLBACK_STATES,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
   PATCH_STATES,
@@ -54,15 +50,9 @@ import {
 } from "./starfield/stats";
 import { createBakePipeline } from "./starfield/bake-pipeline";
 import {
-  DEFAULT_NEBULA_PARAMS,
-  DEFAULT_NEBULA_RADIUS,
-  cloneNebulaParams,
   createNebulaLayer,
 } from "./nebula";
-import type {
-  NebulaLayerApi,
-  NebulaParams,
-} from "./nebula";
+import type { NebulaLayerApi } from "./nebula";
 import type {
   BakeUniforms,
   CameraInfo,
@@ -118,7 +108,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   let pipeline: BakePipeline;
   let bakeStatusHandler: (label: string, disabled?: boolean) => void = () => {};
   let readoutsChangeHandler: (readouts?: unknown) => void = () => {};
-  let brightStarOverlayEnabled = BRIGHT_STAR_OVERLAY_ENABLED;
+  let brightStarOverlayEnabled: boolean = BRIGHT_STAR_OVERLAY_ENABLED;
   let catalogDirty = true;
   let overlayCatalogDirty = true;
   let autoLayoutTimer = 0;
@@ -138,65 +128,29 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     forwardZ: -1,
   };
 
-  const defaultPatchLayout = createAutoPatchLayout({
+  const initialPatchLayout = createAutoPatchLayout({
     cameraInfo: currentCameraInfo,
     maxTextureSize,
     accumulationType,
     residentBytesPerPixel: residentPatchBytesPerPixel,
   });
-  const defaultStarParams: StarLayerParams = {
-    uDensity: 360,
-    uStarSize: 5,
-    uSizeVar: 0.95,
-    uLargeStarRarity: DEFAULT_LARGE_STAR_RARITY,
-    uBright: 5,
-    uBrightVar: 0.95,
-    uGlareSize: 7,
-    uGlareStr: 0.24,
-    uGlareVar: 0.95,
-    uColorVar: 1,
-    uSeed: 1,
-  };
-  const defaultBackgroundParams: NebulaParams = cloneNebulaParams(DEFAULT_NEBULA_PARAMS);
-  const defaults = {
-    ...defaultStarParams,
-    skyBackgroundEnabled: true,
-    skyBackgroundRadius: DEFAULT_NEBULA_RADIUS,
-    bakedStarsEnabled: true,
-    bakedStarsRadius: DEFAULT_BAKED_STAR_RADIUS,
-    brightOverlayEnabled: BRIGHT_STAR_OVERLAY_ENABLED,
-    brightOverlayRadius: DEFAULT_BRIGHT_STAR_OVERLAY_RADIUS,
-    uWinkleAmount: DEFAULT_WINKLE_AMOUNT,
-    uEffectMinSize: DEFAULT_EFFECT_MIN_SIZE,
-    uEffectMaxSize: DEFAULT_EFFECT_MAX_SIZE,
-    uWinkleSharpness: DEFAULT_WINKLE_SHARPNESS,
-    uWinkleFlashiness: DEFAULT_WINKLE_FLASHINESS,
-    backgroundParams: defaultBackgroundParams,
-  };
-
   const layerState: StarfieldLayerState = {
     bakedStars: {
-      enabled: defaults.bakedStarsEnabled,
-      radius: defaults.bakedStarsRadius,
-      params: { ...defaultStarParams },
+      enabled: STARFIELD_CONFIG.baked.enabled,
+      radius: STARFIELD_CONFIG.baked.radius,
+      params: cloneStarLayerParams(STARFIELD_CONFIG.baked.params),
     },
     brightOverlay: {
-      enabled: defaults.brightOverlayEnabled,
-      radius: defaults.brightOverlayRadius,
+      enabled: STARFIELD_CONFIG.overlay.enabled,
+      radius: STARFIELD_CONFIG.overlay.radius,
       params: {
-        ...defaultStarParams,
-        uWinkleAmount: defaults.uWinkleAmount,
-        uEffectMinSize: defaults.uEffectMinSize,
-        uEffectMaxSize: defaults.uEffectMaxSize,
-        uWinkleSharpness: defaults.uWinkleSharpness,
-        uWinkleFlashiness: defaults.uWinkleFlashiness,
+        ...cloneStarLayerParams(STARFIELD_CONFIG.overlay.params),
       },
     },
   };
   const stats = createInitialStats({
-    defaults,
-    defaultPatchLayout,
-    supersample: defaultPatchLayout.supersample,
+    initialPatchLayout,
+    supersample: initialPatchLayout.supersample,
     maxTextureSize,
     accumulationTypeLabel,
     sphereSegments: SKYDOME_SPHERE_SEGMENTS,
@@ -210,10 +164,10 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
 
   const bakeUniforms: BakeUniforms = {
     uBakeSize: { value: new THREE.Vector2(
-      defaultPatchLayout.storageWidth * defaultPatchLayout.supersample,
-      defaultPatchLayout.storageHeight * defaultPatchLayout.supersample,
+      initialPatchLayout.storageWidth * initialPatchLayout.supersample,
+      initialPatchLayout.storageHeight * initialPatchLayout.supersample,
     ) },
-    uOutputSize: { value: new THREE.Vector2(defaultPatchLayout.storageWidth, defaultPatchLayout.storageHeight) },
+    uOutputSize: { value: new THREE.Vector2(initialPatchLayout.storageWidth, initialPatchLayout.storageHeight) },
     uTileUvMin: { value: new THREE.Vector2(0, 0) },
     uTileUvSize: { value: new THREE.Vector2(1, 1) },
     uScreenPixelAngle: screenPixelAngleUniform,
@@ -244,11 +198,11 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     uGlareVar: { value: layerState.brightOverlay.params.uGlareVar },
     uColorVar: { value: layerState.brightOverlay.params.uColorVar },
     uSeed: { value: layerState.brightOverlay.params.uSeed },
-    uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount ?? DEFAULT_WINKLE_AMOUNT },
-    uEffectMinSize: { value: layerState.brightOverlay.params.uEffectMinSize ?? DEFAULT_EFFECT_MIN_SIZE },
-    uEffectMaxSize: { value: layerState.brightOverlay.params.uEffectMaxSize ?? DEFAULT_EFFECT_MAX_SIZE },
-    uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness ?? DEFAULT_WINKLE_SHARPNESS },
-    uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness ?? DEFAULT_WINKLE_FLASHINESS },
+    uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount! },
+    uEffectMinSize: { value: layerState.brightOverlay.params.uEffectMinSize! },
+    uEffectMaxSize: { value: layerState.brightOverlay.params.uEffectMaxSize! },
+    uWinkleSharpness: { value: layerState.brightOverlay.params.uWinkleSharpness! },
+    uWinkleFlashiness: { value: layerState.brightOverlay.params.uWinkleFlashiness! },
   };
   layerState.bakedStars.uniforms = bakeUniforms;
   layerState.brightOverlay.uniforms = overlayUniforms;
@@ -280,7 +234,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   downsampleQuad.frustumCulled = false;
   downsampleScene.add(downsampleQuad);
 
-  let currentPatchLayout = defaultPatchLayout;
+  let currentPatchLayout = initialPatchLayout;
   let currentSupersample = currentPatchLayout.supersample;
   let patchDescriptors = createPatchDescriptorsWithTargets(currentPatchLayout);
   let supersampleTarget = targetManager.createAccumulationTarget(1, 1);
@@ -303,6 +257,10 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     fallbackPatchTarget,
     getSphereSegments: () => SKYDOME_SPHERE_SEGMENTS,
     initialRadius: layerState.bakedStars.radius,
+    geometryUvRangeForDescriptor: (descriptor) => ({
+      uvMin: descriptor.storageUvMin,
+      uvSize: descriptor.storageUvSize,
+    }),
     onBlendStatsChange: () => pipeline?.syncBakeQueueStats(),
   });
   skydome.rebuildBakedDomeMeshes(patchDescriptors);
@@ -1046,7 +1004,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   updatePatchStats();
 
   return {
-    defaults,
     getReadouts,
     setLayerEnabled,
     getLayerEnabled,

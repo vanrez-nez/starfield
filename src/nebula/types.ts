@@ -136,14 +136,7 @@ export interface CreateNebulaLayerArgs {
   getSphereSegments: () => number;
 }
 
-export interface NebulaLayerDefaults {
-  enabled: boolean;
-  radius: number;
-  params: NebulaParams;
-}
-
 export interface NebulaLayerApi {
-  defaults: NebulaLayerDefaults;
   readonly activeBlendCount: number;
   getParams(): NebulaParams;
   getParam(key: string): number;

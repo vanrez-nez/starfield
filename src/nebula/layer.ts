@@ -5,17 +5,16 @@ import {
   PATCH_STATES,
 } from "../starfield/constants";
 import {
+  STARFIELD_CONFIG,
+  cloneBackgroundParams,
+  cloneFieldGradient,
+} from "../config";
+import {
   assignDescriptorStorage,
   createPatchDescriptors as createPatchDescriptorList,
 } from "../starfield/patch-layout";
 import { createSkydomeManager } from "../starfield/skydome";
-import {
-  DEFAULT_FIELD_GRADIENT,
-  DEFAULT_NEBULA_PARAMS,
-  DEFAULT_NEBULA_RADIUS,
-  MIN_NEBULA_SPHERE_SEGMENTS,
-  cloneNebulaParams,
-} from "./constants";
+import { MIN_NEBULA_SPHERE_SEGMENTS } from "./constants";
 import { createNebulaBakePipeline } from "./bake-pipeline";
 import {
   createLightCompositionBakeMaterial,
@@ -61,13 +60,8 @@ export function createNebulaLayer({
   notifyReadouts,
   getSphereSegments,
 }: CreateNebulaLayerArgs): NebulaLayerApi {
-  const defaults = {
-    enabled: true,
-    radius: DEFAULT_NEBULA_RADIUS,
-    params: cloneNebulaParams(DEFAULT_NEBULA_PARAMS),
-  };
-  const params = cloneNebulaParams(defaults.params);
-  const uniforms = createNebulaUniforms(params, DEFAULT_FIELD_GRADIENT);
+  const params = cloneBackgroundParams();
+  const uniforms = createNebulaUniforms(params, cloneFieldGradient());
   const fallbackTexture = createFallbackBackgroundTexture();
   const fallbackTarget: PatchTextureTarget = { texture: fallbackTexture };
   const bakeMaterial = createLightCompositionBakeMaterial(uniforms);
@@ -76,8 +70,8 @@ export function createNebulaLayer({
   bakeQuad.frustumCulled = false;
   bakeScene.add(bakeQuad);
 
-  let enabled = defaults.enabled;
-  let radius = defaults.radius;
+  let enabled: boolean = STARFIELD_CONFIG.background.enabled;
+  let radius = STARFIELD_CONFIG.background.radius;
   let currentLayout = initialLayout;
   let descriptors = createNebulaPatchDescriptors(currentLayout);
 
@@ -352,7 +346,6 @@ export function createNebulaLayer({
   syncStats();
 
   return {
-    defaults,
     getParams: () => params,
     getParam,
     getUniforms: () => uniforms,

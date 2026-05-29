@@ -1,10 +1,6 @@
 export {
-  DEFAULT_FIELD_GRADIENT,
-  DEFAULT_NEBULA_PARAMS,
-  DEFAULT_NEBULA_RADIUS,
   MIN_NEBULA_SPHERE_SEGMENTS,
   NEBULA_MAX_ANCHORS,
-  cloneNebulaParams,
 } from "./constants";
 export { createNebulaBakePipeline } from "./bake-pipeline";
 export {
@@ -21,7 +17,6 @@ export type {
   FieldGradient,
   FieldGradientAnchor,
   NebulaLayerApi,
-  NebulaLayerDefaults,
   NebulaParams,
   NebulaUniforms,
 } from "./types";
