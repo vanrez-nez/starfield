@@ -298,12 +298,6 @@ export function createNebulaLayer({
     requestRender();
   }
 
-  function setSphereSegments(): void {
-    skydome.rebuildBakedDomeMeshes(descriptors);
-    syncStats();
-    requestRender();
-  }
-
   function setLayout(layout: PatchLayout, { bake = true }: { bake?: boolean; reason?: string } = {}): void {
     const previousDescriptors = descriptors;
     pipeline.clearBakeQueue();
@@ -368,7 +362,6 @@ export function createNebulaLayer({
     getEnabled: () => enabled,
     setRadius,
     getRadius: () => radius,
-    setSphereSegments,
     setLayout,
     markStale,
     bakeNow,

@@ -12,21 +12,11 @@ interface PanelGroupParam {
   group: string;
 }
 
-interface DisplayRangeParam {
-  kind: "display";
-  key: string;
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-  format: RangeFormatFn;
-}
-
 interface LayerTabsParam {
   kind: "layerTabs";
 }
 
-type PanelParam = PanelGroupParam | DisplayRangeParam | LayerTabsParam;
+type PanelParam = PanelGroupParam | LayerTabsParam;
 
 interface LayerGroupControl {
   type: "group";
@@ -75,7 +65,6 @@ interface LayerParamState {
 
 interface StarfieldControlApi {
   defaults: Record<string, unknown>;
-  setSphereSegments(value: number): void;
   setLayerRadius(layerId: StarfieldControlLayerId, value: number): void;
   getLayerEnabled(layerId: StarfieldControlLayerId): boolean;
   setLayerEnabled(layerId: StarfieldControlLayerId, enabled: boolean): void;
@@ -109,8 +98,6 @@ interface StatsGroup {
 }
 
 const PARAMS: PanelParam[] = [
-  { group: "Display" },
-  { key: "sphereSegments", label: "Sphere Segments", min: 16, max: 256, step: 16, format: (v) => v.toFixed(0), kind: "display" },
   { group: "Layers" },
   { kind: "layerTabs" },
 ];
@@ -595,45 +582,6 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
     refreshVisibleStatsPanel();
   }
 
-  function addRangeRow(param: DisplayRangeParam): void {
-    const row = document.createElement("div");
-    row.className = "row";
-
-    const top = document.createElement("div");
-    top.className = "top";
-
-    const label = document.createElement("label");
-    label.textContent = param.label;
-
-    const value = document.createElement("span");
-    value.className = "val";
-
-    const input = document.createElement("input");
-    input.type = "range";
-    input.min = String(param.min);
-    input.max = String(param.max);
-    input.step = String(param.step);
-    input.value = String(starfield.defaults[param.key]);
-
-    function paint(nextValue: number): void {
-      value.textContent = param.format(nextValue);
-      updateSliderFill(input, param.min, param.max);
-    }
-
-    input.addEventListener("input", () => {
-      const nextValue = Number(input.value);
-      paint(nextValue);
-      if (param.kind === "display") {
-        starfield.setSphereSegments(nextValue);
-      }
-    });
-
-    top.append(label, value);
-    row.append(top, input);
-    rows.append(row);
-    paint(Number(input.value));
-  }
-
   function addLayerToggleRow(parent: HTMLElement, layer: ControlLayerId, control: LayerToggleControl): void {
     const row = document.createElement("div");
     row.className = "row row--toggle";
@@ -827,10 +775,7 @@ export function createControls({ rows, buttons, starfield, gpuStarfield, getStat
 
       if (param.kind === "layerTabs") {
         addLayerTabs();
-        return;
       }
-
-      addRangeRow(param);
     });
   }
 

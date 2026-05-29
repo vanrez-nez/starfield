@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 import type { CameraInfo, StarClassStats } from "./types";
 
 export const DOME_RADIUS = 10;
+export const SKYDOME_SPHERE_SEGMENTS = 32;
 export const REFERENCE_BAKE_WIDTH = 4096;
 export const REFERENCE_BAKE_HEIGHT = REFERENCE_BAKE_WIDTH / 2;
 export const MAX_AUTO_SUPERSAMPLE = 8;
@@ -27,7 +28,7 @@ export const BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS = false;
 export const BRIGHT_STAR_OVERLAY_STRENGTH = 0.38;
 const BRIGHT_STAR_OVERLAY_RADIUS_SCALE = 0.985;
 export const WINKLE_MAX_COUNT = 128;
-export const DEFAULT_WINKLE_AMOUNT = 0;
+export const DEFAULT_WINKLE_AMOUNT = 1;
 export const DEFAULT_WINKLE_SHARPNESS = 0.65;
 export const DEFAULT_WINKLE_FLASHINESS = 0.65;
 export const DEFAULT_EFFECT_MIN_SIZE = 0;

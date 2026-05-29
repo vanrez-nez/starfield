@@ -17,6 +17,7 @@ import {
   FINAL_TEXTURE_BYTES_PER_PIXEL,
   PATCH_STATES,
   REFERENCE_BAKE_HEIGHT,
+  SKYDOME_SPHERE_SEGMENTS,
   STARFIELD_ALLOCATION_BUDGET_BYTES,
   STAR_QUERY_SEAM_COPIES,
   estimateTextureBytes,
@@ -50,7 +51,6 @@ import {
   patchDescriptorSummary as patchDescriptorSummaryFromStats,
   updatePatchDescriptorDemand as updatePatchDescriptorDemandFromStats,
   updatePatchStats as updatePatchStatsFromStats,
-  updateSphereSegmentStats,
 } from "./starfield/stats";
 import { createBakePipeline } from "./starfield/bake-pipeline";
 import {
@@ -160,7 +160,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   const defaultBackgroundParams: NebulaParams = cloneNebulaParams(DEFAULT_NEBULA_PARAMS);
   const defaults = {
     ...defaultStarParams,
-    sphereSegments: 128,
     skyBackgroundEnabled: true,
     skyBackgroundRadius: DEFAULT_NEBULA_RADIUS,
     bakedStarsEnabled: true,
@@ -175,7 +174,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     backgroundParams: defaultBackgroundParams,
   };
 
-  let currentSphereSegments = defaults.sphereSegments;
   const layerState: StarfieldLayerState = {
     bakedStars: {
       enabled: defaults.bakedStarsEnabled,
@@ -201,7 +199,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     supersample: defaultPatchLayout.supersample,
     maxTextureSize,
     accumulationTypeLabel,
-    currentSphereSegments,
+    sphereSegments: SKYDOME_SPHERE_SEGMENTS,
   });
   window.starfieldStats = stats;
 
@@ -295,7 +293,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     initialLayout: currentPatchLayout,
     stats,
     notifyReadouts,
-    getSphereSegments: () => currentSphereSegments,
+    getSphereSegments: () => SKYDOME_SPHERE_SEGMENTS,
   });
 
   const skydome = createSkydomeManager({
@@ -303,7 +301,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     requestRender,
     targetManager,
     fallbackPatchTarget,
-    getSphereSegments: () => currentSphereSegments,
+    getSphereSegments: () => SKYDOME_SPHERE_SEGMENTS,
     initialRadius: layerState.bakedStars.radius,
     onBlendStatsChange: () => pipeline?.syncBakeQueueStats(),
   });
@@ -679,15 +677,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     nebulaLayer.scheduleBake(CAMERA_BAKE_IDLE_MS);
   }
 
-  function rebuildDisplayGeometry(): void {
-    nebulaLayer.setSphereSegments(currentSphereSegments);
-    skydome.rebuildBakedDomeMeshes(patchDescriptors);
-    starLayers.setSphereSegments(currentSphereSegments);
-    syncOverlayStats();
-    updateSphereSegmentStats(stats, currentSphereSegments);
-    requestRender();
-  }
-
   function completePendingDisplaySwap(): void {
     if (!pendingDisplaySwap) return;
 
@@ -861,12 +850,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     const nextSeed = Math.floor(Math.random() * 1001);
     setLayerParam(layerId, "uSeed", nextSeed, 0);
     return nextSeed;
-  }
-
-  function setSphereSegments(value: number): void {
-    currentSphereSegments = value;
-    rebuildDisplayGeometry();
-    notifyReadouts();
   }
 
   function setLayerEnabled(layerId: LayerId, enabled: boolean): void {
@@ -1065,7 +1048,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   return {
     defaults,
     getReadouts,
-    setSphereSegments,
     setLayerEnabled,
     getLayerEnabled,
     setLayerRadius,

@@ -310,10 +310,6 @@ export function createStarLayerManager({
     }
   }
 
-  function setSphereSegments(value: number): void {
-    void value;
-  }
-
   function refreshBackgroundStats(): void {
   }
 
@@ -359,7 +355,6 @@ export function createStarLayerManager({
     setEnabled,
     setLayerEnabled,
     setLayerRadius,
-    setSphereSegments,
     refreshBackgroundStats,
     setWinkleAmount,
     advanceRuntime,

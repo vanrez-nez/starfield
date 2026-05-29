@@ -74,7 +74,7 @@ interface InitialStatsArgs {
   supersample: number;
   maxTextureSize: number;
   accumulationTypeLabel: string;
-  currentSphereSegments: number;
+  sphereSegments: number;
 }
 
 interface StatsTargetManager {
@@ -116,7 +116,7 @@ export function createInitialStats({
   supersample,
   maxTextureSize,
   accumulationTypeLabel,
-  currentSphereSegments,
+  sphereSegments,
 }: InitialStatsArgs): StarfieldStats {
   return {
     mode: "baked-equirect-skydome-tiled-catalog-splat",
@@ -151,8 +151,8 @@ export function createInitialStats({
     referenceHeight: REFERENCE_BAKE_HEIGHT,
     internalWidth: defaultPatchLayout.storageWidth * supersample,
     internalHeight: defaultPatchLayout.storageHeight * supersample,
-    sphereSegments: currentSphereSegments,
-    sphereVerticalSegments: sphereVerticalSegmentsFor(currentSphereSegments),
+    sphereSegments,
+    sphereVerticalSegments: sphereVerticalSegmentsFor(sphereSegments),
     backgroundLayerEnabled: true,
     backgroundLayerDrawCalls: 1,
     backgroundLayerTriangles: 0,
@@ -751,9 +751,4 @@ export function updatePatchStats(ctx: StatsContext): void {
   stats.subpixelEnergyMode = "density-pin-normal";
   stats.tileAwareGeneration = true;
   stats.starQueryGrid = `${currentStarGrid(bakeUniforms).columns}x${currentStarGrid(bakeUniforms).rows}`;
-}
-
-export function updateSphereSegmentStats(stats: StarfieldStats, currentSphereSegments: number): void {
-  stats.sphereSegments = currentSphereSegments;
-  stats.sphereVerticalSegments = sphereVerticalSegmentsFor(currentSphereSegments);
 }

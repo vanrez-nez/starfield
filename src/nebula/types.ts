@@ -154,7 +154,6 @@ export interface NebulaLayerApi {
   getEnabled(): boolean;
   setRadius(value: number): void;
   getRadius(): number;
-  setSphereSegments(value?: number): void;
   setLayout(layout: PatchLayout, options?: { bake?: boolean; reason?: string }): void;
   markStale(reason?: string): void;
   bakeNow(): void;
