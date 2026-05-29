@@ -69,6 +69,7 @@ export const STARFIELD_CONFIG = {
       uGlareVar: 0.95,
       uColorVar: 1,
       uSeed: 1,
+      uParallaxStrength: 0,
     },
   } satisfies LayerConfig<"bakedStars", StarLayerParams>,
   gpuField: {
@@ -100,6 +101,7 @@ export const STARFIELD_CONFIG = {
       uGlareVar: 0.95,
       uColorVar: 1,
       uSeed: 1,
+      uParallaxStrength: 0,
       uWinkleAmount: 1,
       uEffectMinSize: 0,
       uEffectMaxSize: 0.75,

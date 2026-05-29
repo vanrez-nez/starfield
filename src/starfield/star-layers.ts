@@ -53,6 +53,8 @@ const OVERLAY_SHARED_UNIFORM_KEYS = [
   "uEffectMaxSize",
   "uWinkleSharpness",
   "uWinkleFlashiness",
+  "uParallaxStrength",
+  "uParallaxOffset",
 ];
 
 function syncSharedOverlayUniformNodes(source: OverlayUniforms, converted: UniformMap): void {
@@ -145,6 +147,8 @@ export function createStarLayerManager({
     uEffectMinSize: overlayUniforms.uEffectMinSize,
     uEffectMaxSize: overlayUniforms.uEffectMaxSize,
     uOverlayStrength: { value: BRIGHT_STAR_OVERLAY_STRENGTH },
+    uParallaxStrength: overlayUniforms.uParallaxStrength,
+    uParallaxOffset: overlayUniforms.uParallaxOffset,
   };
   const brightOverlayGeometry = createEmptyOverlayGeometry();
   const brightOverlayMaterial = createOverlayMaterial(brightOverlayUniforms);
@@ -182,6 +186,8 @@ export function createStarLayerManager({
     uWinkleFlashiness: overlayUniforms.uWinkleFlashiness,
     uTime: { value: 0 },
     uWinkleAmount: overlayUniforms.uWinkleAmount ?? { value: currentWinkleAmount },
+    uParallaxStrength: overlayUniforms.uParallaxStrength,
+    uParallaxOffset: overlayUniforms.uParallaxOffset,
   };
   const winkleOverlayGeometry = createWinkleGeometry();
   const winkleOverlayMaterial = createWinkleMaterial(winkleUniforms);
@@ -295,20 +301,6 @@ export function createStarLayerManager({
     }
   }
 
-  function setLayerRadius(layerId: string, value: number): void {
-    const nextValue = Number(value);
-    if (!Number.isFinite(nextValue) || nextValue <= 0) return;
-
-    if (layerId === "brightOverlay") {
-      currentOverlayRadius = nextValue;
-      brightOverlayUniforms.uRadius.value = nextValue;
-      winkleUniforms.uRadius.value = nextValue;
-      syncBrightOverlayVisibility();
-      syncWinkleVisibility();
-      requestRender();
-    }
-  }
-
   function refreshBackgroundStats(): void {
   }
 
@@ -353,7 +345,6 @@ export function createStarLayerManager({
     rebuild,
     setEnabled,
     setLayerEnabled,
-    setLayerRadius,
     refreshBackgroundStats,
     setWinkleAmount,
     advanceRuntime,

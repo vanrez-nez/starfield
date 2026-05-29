@@ -78,6 +78,11 @@ function directionToEquirectUv(direction: any): any {
   return vec2(u, v);
 }
 
+function parallaxDirectionNode(direction: any, uParallaxStrength: any, uParallaxOffset: any): any {
+  const strength = clamp(uParallaxStrength, 0.0, 1.0);
+  return normalize((normalize(direction) as any).sub(uParallaxOffset.mul(strength)));
+}
+
 function intervalError(value: any, intervalSize: any): any {
   return max(max(value.negate(), value.sub(intervalSize)), 0.0);
 }
@@ -100,6 +105,20 @@ function storageLocalU(skyU: any, storageMinU: any, storageSizeU: any): any {
   return wrappedIntervalOffset(skyU, storageMinU, storageSizeU).div(storageSizeU);
 }
 
+function storageLocalUv(skyUv: any, storageMin: any, storageSize: any): any {
+  return vec2(
+    storageLocalU(skyUv.x, storageMin.x, storageSize.x),
+    skyUv.y.sub(storageMin.y).div(storageSize.y),
+  );
+}
+
+function uvInside01Mask(localUv: any): any {
+  return step(0.0, localUv.x)
+    .mul(step(localUv.x, 1.0))
+    .mul(step(0.0, localUv.y))
+    .mul(step(localUv.y, 1.0));
+}
+
 function createPatchNodeMaterial({
   uniforms,
 }: {
@@ -118,6 +137,8 @@ function createPatchNodeMaterial({
   const uCurrentStorageUvSize = patchVectorUniform(uniforms.uCurrentStorageUvSize.value as THREE.Vector2) as any;
   const uNextStorageUvMin = patchVectorUniform(uniforms.uNextStorageUvMin.value as THREE.Vector2) as any;
   const uNextStorageUvSize = patchVectorUniform(uniforms.uNextStorageUvSize.value as THREE.Vector2) as any;
+  const uParallaxStrength = numberUniform(uniforms, "uParallaxStrength");
+  const uParallaxOffset = vec3Uniform(uniforms, "uParallaxOffset");
   uniforms.uCurrentTexture = uCurrentTexture as unknown as UniformMap[string];
   uniforms.uNextTexture = uNextTexture as unknown as UniformMap[string];
   uniforms.uBlend = uBlend as unknown as UniformMap[string];
@@ -154,19 +175,18 @@ function createPatchNodeMaterial({
     return modelViewProjection;
   })();
   material.colorNode = Fn(() => {
-    const skyUv = directionToEquirectUv(vDirection);
+    const displayUv = directionToEquirectUv(vDirection);
+    const sampleUv = directionToEquirectUv(parallaxDirectionNode(vDirection, uParallaxStrength, uParallaxOffset));
     const contentLocalUv = vec2(
-      wrappedIntervalOffset(skyUv.x, uContentUvMin.x, uContentUvSize.x).div(uContentUvSize.x),
-      skyUv.y.sub(uContentUvMin.y).div(uContentUvSize.y),
+      wrappedIntervalOffset(displayUv.x, uContentUvMin.x, uContentUvSize.x).div(uContentUvSize.x),
+      displayUv.y.sub(uContentUvMin.y).div(uContentUvSize.y),
     );
-    const currentPatchUv = clamp(vec2(
-      storageLocalU(skyUv.x, uCurrentStorageUvMin.x, uCurrentStorageUvSize.x),
-      skyUv.y.sub(uCurrentStorageUvMin.y).div(uCurrentStorageUvSize.y),
-    ), 0.0, 1.0);
-    const nextPatchUv = clamp(vec2(
-      storageLocalU(skyUv.x, uNextStorageUvMin.x, uNextStorageUvSize.x),
-      skyUv.y.sub(uNextStorageUvMin.y).div(uNextStorageUvSize.y),
-    ), 0.0, 1.0);
+    const currentPatchUvRaw = storageLocalUv(sampleUv, uCurrentStorageUvMin, uCurrentStorageUvSize);
+    const nextPatchUvRaw = storageLocalUv(sampleUv, uNextStorageUvMin, uNextStorageUvSize);
+    const currentPatchUv = clamp(currentPatchUvRaw, 0.0, 1.0);
+    const nextPatchUv = clamp(nextPatchUvRaw, 0.0, 1.0);
+    const currentSampleMask = uvInside01Mask(currentPatchUvRaw);
+    const nextSampleMask = uvInside01Mask(nextPatchUvRaw);
 
     const guardFrac = (max as any)(
       uCurrentStorageUvSize.sub(uContentUvSize).div(uContentUvSize.mul(2.0)),
@@ -200,8 +220,8 @@ function createPatchNodeMaterial({
       topOwner.mul(bottomOwner),
     );
     const ownership = clamp(horizontalOwner.mul(verticalOwner), 0.0, 1.0);
-    const currentColor = texture(uCurrentTexture, currentPatchUv);
-    const nextColor = texture(uNextTexture, nextPatchUv);
+    const currentColor = texture(uCurrentTexture, currentPatchUv).mul(currentSampleMask);
+    const nextColor = texture(uNextTexture, nextPatchUv).mul(nextSampleMask);
     return mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0)).mul(ownership);
   })();
 
@@ -228,7 +248,7 @@ function vec2Uniform(uniforms: UniformMap, key: string): any {
 function vec3Uniform(uniforms: UniformMap, key: string): any {
   const existing = uniforms[key] as unknown as { value: unknown; isUniformNode?: boolean };
   if (existing?.isUniformNode) return existing;
-  const value = existing?.value instanceof THREE.Vector3 ? existing.value.clone() : new THREE.Vector3();
+  const value = existing?.value instanceof THREE.Vector3 ? existing.value : new THREE.Vector3();
   const node = uniform(value);
   uniforms[key] = node as unknown as UniformMap[string];
   return node as any;
@@ -467,6 +487,8 @@ export function createOverlayMaterial(uniforms: UniformMap): StarfieldMaterial {
   const uEffectMinSize = numberUniform(uniforms, "uEffectMinSize");
   const uEffectMaxSize = numberUniform(uniforms, "uEffectMaxSize");
   const uOverlayStrength = numberUniform(uniforms, "uOverlayStrength");
+  const uParallaxStrength = numberUniform(uniforms, "uParallaxStrength");
+  const uParallaxOffset = vec3Uniform(uniforms, "uParallaxOffset");
 
   const vLocal = varyingProperty("vec2", "vOverlayLocal") as any;
   const vRandoms = varyingProperty("vec4", "vOverlayRandoms") as any;
@@ -482,7 +504,7 @@ export function createOverlayMaterial(uniforms: UniformMap): StarfieldMaterial {
     const iSizeGate = attribute("iSizeGate", "float") as any;
     const iClass = attribute("iClass", "float") as any;
 
-    const dir = normalize(iDirection) as any;
+    const dir = parallaxDirectionNode(iDirection, uParallaxStrength, uParallaxOffset);
     const referenceUp = (select as any)(abs(dir.y).greaterThan(0.96), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
     const right = normalize(cross(referenceUp, dir) as any) as any;
     const up = normalize(cross(right, dir) as any) as any;
@@ -577,6 +599,8 @@ export function createWinkleMaterial(uniforms: UniformMap): StarfieldMaterial {
   const uWinkleFlashiness = numberUniform(uniforms, "uWinkleFlashiness");
   const uTime = numberUniform(uniforms, "uTime");
   const uWinkleAmount = numberUniform(uniforms, "uWinkleAmount");
+  const uParallaxStrength = numberUniform(uniforms, "uParallaxStrength");
+  const uParallaxOffset = vec3Uniform(uniforms, "uParallaxOffset");
 
   const vLocal = varyingProperty("vec2", "vWinkleLocal") as any;
   const vRandoms = varyingProperty("vec4", "vWinkleRandoms") as any;
@@ -593,7 +617,7 @@ export function createWinkleMaterial(uniforms: UniformMap): StarfieldMaterial {
     const iClass = attribute("iClass", "float") as any;
     const iWinkle = attribute("iWinkle", "vec4") as any;
 
-    const dir = normalize(iDirection) as any;
+    const dir = parallaxDirectionNode(iDirection, uParallaxStrength, uParallaxOffset);
     const referenceUp = (select as any)(abs(dir.y).greaterThan(0.96), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
     const right = normalize(cross(referenceUp, dir) as any) as any;
     const up = normalize(cross(right, dir) as any) as any;
@@ -733,9 +757,14 @@ export function createDownsampleMaterial(uniforms: DownsampleUniforms): Starfiel
 export function createPatchDomeMaterial({
   descriptor,
   visibleTarget,
+  parallaxUniforms,
 }: {
   descriptor: PatchDescriptor;
   visibleTarget: VisiblePatchTarget;
+  parallaxUniforms?: {
+    strength: { value: number };
+    offset: { value: THREE.Vector3 };
+  };
 }): StarfieldMaterial {
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
@@ -759,6 +788,8 @@ export function createPatchDomeMaterial({
       uCurrentStorageUvSize: { value: sampling.storageUvSize.clone() },
       uNextStorageUvMin: { value: sampling.storageUvMin.clone() },
       uNextStorageUvSize: { value: sampling.storageUvSize.clone() },
+      uParallaxStrength: { value: parallaxUniforms?.strength.value ?? 0 },
+      uParallaxOffset: { value: parallaxUniforms?.offset.value ?? new THREE.Vector3() },
     },
   });
 }

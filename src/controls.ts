@@ -47,8 +47,6 @@ interface LayerTabConfig {
 }
 
 interface StarfieldControlApi {
-  setLayerRadius(layerId: StarfieldControlLayerId, value: number): void;
-  getLayerRadius(layerId: StarfieldControlLayerId): number;
   getLayerEnabled(layerId: StarfieldControlLayerId): boolean;
   setLayerEnabled(layerId: StarfieldControlLayerId, enabled: boolean): void;
   getLayerParam(layerId: StarfieldControlLayerId, key: string): ControlValue;
@@ -100,7 +98,6 @@ const LAYER_TABS: LayerTabConfig[] = [
     label: "Nebula",
     controls: [
       { type: "toggle", key: "skyBackgroundEnabled", label: "Enabled" },
-      { type: "range", key: "skyBackgroundRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
       { type: "group", label: "Nebula" },
       { type: "range", key: "uSeed", label: "Seed", min: 0, max: 1000, step: 0.1, format: (v) => v.toFixed(1), param: true },
       { type: "range", key: "uCoverage", label: "Coverage", min: 0.02, max: 0.98, step: 0.01, format: (v) => v.toFixed(2), param: true },
@@ -126,7 +123,7 @@ const LAYER_TABS: LayerTabConfig[] = [
     label: "Stars Bg",
     controls: [
       { type: "toggle", key: "bakedStarsEnabled", label: "Enabled" },
-      { type: "range", key: "bakedStarsRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
+      { type: "range", key: "uParallaxStrength", label: "Strength", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
       ...STAR_LAYER_CONTROLS,
     ],
   },
@@ -150,7 +147,7 @@ const LAYER_TABS: LayerTabConfig[] = [
     label: "Stars Fg",
     controls: [
       { type: "toggle", key: "brightOverlayEnabled", label: "Enabled" },
-      { type: "range", key: "brightOverlayRadius", label: "Radius", min: 1, max: 25, step: 0.05, format: (v) => v.toFixed(2) },
+      { type: "range", key: "uParallaxStrength", label: "Strength", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
       ...STAR_LAYER_CONTROLS,
       { type: "group", label: "Effects" },
       { type: "range", key: "uWinkleAmount", label: "Winkle Amount", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), param: true },
@@ -206,7 +203,6 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     "",
     "Layers",
     `Sky Background: ${stats.backgroundLayerEnabled ? "on" : "off"}`,
-    `Background Radius: ${formatNumber(stats.backgroundLayerRadius, 2)}`,
     `Background Coverage: ${formatNumber(stats.backgroundCoverage, 2)}`,
     `Background Density: ${formatNumber(stats.backgroundDensity, 2)}`,
     `Background Strength: ${formatNumber(stats.backgroundNebulaStrength, 2)}`,
@@ -221,7 +217,7 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     `Background Jobs: ${formatInteger(stats.backgroundActiveBakeJobs)} active / ${formatInteger(stats.backgroundPendingBakeJobs)} pending`,
     `Background Dirty: ${formatInteger(stats.backgroundDirtyPatchCount)}`,
     `Baked Stars: ${stats.bakedStarLayerEnabled ? "on" : "off"}`,
-    `Baked Radius: ${formatNumber(stats.bakedStarLayerRadius, 2)}`,
+    `Stars Bg Strength: ${formatNumber(stats.bakedStarLayerStrength, 2)}`,
     `Baked Density: ${formatInteger(stats.bakedStarLayerDensity)}`,
     `Baked Seed: ${formatNumber(stats.bakedStarLayerSeed, 0)}`,
     `Baked Count: ${formatInteger(stats.bakedStarLayerStarCount)}`,
@@ -233,7 +229,7 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     `GPU Field Draws: ${formatInteger(stats.gpuFieldDrawCalls)}`,
     `GPU Field Tris: ${formatInteger(stats.gpuFieldTriangles)}`,
     `Bright Overlay: ${stats.overlayEnabled ? "on" : "off"}`,
-    `Overlay Radius: ${formatNumber(stats.overlayRadius, 2)}`,
+    `Stars Fg Strength: ${formatNumber(stats.overlayLayerStrength, 2)}`,
     `Overlay Density: ${formatInteger(stats.overlayLayerDensity)}`,
     `Overlay Seed: ${formatNumber(stats.overlayLayerSeed, 0)}`,
     `Overlay Count: ${formatInteger(stats.overlayLayerStarCount)}`,
@@ -495,16 +491,6 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     starfield.setLayerParam(layer, key, value, delay);
   }
 
-  function getLayerRadius(layer: ControlLayerId): number {
-    if (isGpuFieldLayer(layer)) return 0;
-    return starfield.getLayerRadius(layer);
-  }
-
-  function setLayerRadius(layer: ControlLayerId, value: number): void {
-    if (isGpuFieldLayer(layer)) return;
-    starfield.setLayerRadius(layer, value);
-  }
-
   function layerBindingKey(layer: ControlLayerId, key: string): string {
     return `${layer}:${key}`;
   }
@@ -518,10 +504,8 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     if (!control) return;
     if (control.type === "toggle") {
       paneState[layer][key] = getLayerEnabled(layer);
-    } else if (control.param) {
-      paneState[layer][key] = normalizeNumber(getLayerParam(layer, key));
     } else {
-      paneState[layer][key] = getLayerRadius(layer);
+      paneState[layer][key] = normalizeNumber(getLayerParam(layer, key));
     }
     binding.refresh();
   }
@@ -650,7 +634,7 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
       return;
     }
 
-    paneState[layer][control.key] = control.param ? normalizeNumber(getLayerParam(layer, control.key)) : getLayerRadius(layer);
+    paneState[layer][control.key] = normalizeNumber(getLayerParam(layer, control.key));
     const binding = parent.addBinding(paneState[layer], control.key, {
       label: control.label,
       min: control.min,
@@ -662,11 +646,7 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     binding.on("change", (event) => {
       const nextValue = Number(event.value);
       if (!Number.isFinite(nextValue)) return;
-      if (control.param) {
-        setLayerParam(layer, control.key, nextValue, 180);
-      } else {
-        setLayerRadius(layer, nextValue);
-      }
+      setLayerParam(layer, control.key, nextValue, 180);
       refreshDiagnostics();
     });
   }

@@ -145,7 +145,7 @@ function renderFrame(): void {
     elapsedTime: timer.getElapsed(),
     cameraInfo: frameCameraInfo,
   });
-  starfield.recordRender();
+  starfield.recordRender({ cameraInfo: frameCameraInfo });
   renderer.render(scene, camera);
   uiControls.updateFps(delta);
 }

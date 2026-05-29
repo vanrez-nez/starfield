@@ -282,6 +282,8 @@ export interface StarUniforms {
   uGlareVar: MutableUniform<number>;
   uColorVar: MutableUniform<number>;
   uSeed: MutableUniform<number>;
+  uParallaxStrength: MutableUniform<number>;
+  uParallaxOffset: MutableUniform<THREE.Vector3>;
 }
 
 export interface BakeUniforms extends StarUniforms {
@@ -354,6 +356,7 @@ export interface StarLayerParams {
   uGlareVar: number;
   uColorVar: number;
   uSeed: number;
+  uParallaxStrength: number;
   uWinkleAmount?: number;
   uEffectMinSize?: number;
   uEffectMaxSize?: number;

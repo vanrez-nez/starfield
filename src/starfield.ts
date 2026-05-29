@@ -35,6 +35,7 @@ import {
 import { createRenderTargetManager } from "./starfield/render-targets";
 import {
   createDownsampleMaterial,
+  createPatchDomeMaterial,
   createStarMaterial,
 } from "./starfield/shaders";
 import { createSkydomeManager } from "./starfield/skydome";
@@ -73,6 +74,8 @@ import type {
 
 type BakePipeline = ReturnType<typeof createBakePipeline>;
 type DemandReadouts = ReturnType<typeof computeDemandReadoutsFromStats>;
+
+const PARALLAX_GUARD_USAGE = 0.45;
 
 interface CreateStarfieldArgs {
   renderer: THREE.Renderer;
@@ -161,6 +164,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   const fallbackPatchTarget: PatchTextureTarget = { texture: fallbackPatchTexture };
   const screenPixelAngleUniform = { value: Math.PI / REFERENCE_BAKE_HEIGHT };
   const referenceHeightUniform = { value: REFERENCE_BAKE_HEIGHT };
+  const parallaxOffsetUniform = { value: new THREE.Vector3() };
 
   const bakeUniforms: BakeUniforms = {
     uBakeSize: { value: new THREE.Vector2(
@@ -183,6 +187,8 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     uGlareVar: { value: layerState.bakedStars.params.uGlareVar },
     uColorVar: { value: layerState.bakedStars.params.uColorVar },
     uSeed: { value: layerState.bakedStars.params.uSeed },
+    uParallaxStrength: { value: layerState.bakedStars.params.uParallaxStrength },
+    uParallaxOffset: parallaxOffsetUniform,
   };
   const overlayUniforms: OverlayUniforms = {
     uScreenPixelAngle: screenPixelAngleUniform,
@@ -198,6 +204,8 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     uGlareVar: { value: layerState.brightOverlay.params.uGlareVar },
     uColorVar: { value: layerState.brightOverlay.params.uColorVar },
     uSeed: { value: layerState.brightOverlay.params.uSeed },
+    uParallaxStrength: { value: layerState.brightOverlay.params.uParallaxStrength },
+    uParallaxOffset: parallaxOffsetUniform,
     uWinkleAmount: { value: layerState.brightOverlay.params.uWinkleAmount! },
     uEffectMinSize: { value: layerState.brightOverlay.params.uEffectMinSize! },
     uEffectMaxSize: { value: layerState.brightOverlay.params.uEffectMaxSize! },
@@ -261,6 +269,13 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       uvMin: descriptor.storageUvMin,
       uvSize: descriptor.storageUvSize,
     }),
+    createMaterial: (args) => createPatchDomeMaterial({
+      ...args,
+      parallaxUniforms: {
+        strength: bakeUniforms.uParallaxStrength,
+        offset: parallaxOffsetUniform,
+      },
+    }),
     onBlendStatsChange: () => pipeline?.syncBakeQueueStats(),
   });
   skydome.rebuildBakedDomeMeshes(patchDescriptors);
@@ -309,6 +324,48 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     },
     requestRender,
   });
+
+  const referenceParallaxForward = new THREE.Vector3(0, 0, -1);
+  const currentParallaxForward = new THREE.Vector3(0, 0, -1);
+  let parallaxForwardInitialized = false;
+
+  function currentParallaxScale(): number {
+    let minGuardAngle = Number.POSITIVE_INFINITY;
+    patchDescriptors.forEach((descriptor) => {
+      const guardU = Math.max(0, (descriptor.storageUvSize.x - descriptor.uvSize.x) * 0.5);
+      const guardV = Math.max(0, (descriptor.storageUvSize.y - descriptor.uvSize.y) * 0.5);
+      const guardAngles = [guardU * Math.PI * 2, guardV * Math.PI].filter((angle) => angle > 1e-8);
+      guardAngles.forEach((angle) => {
+        minGuardAngle = Math.min(minGuardAngle, angle);
+      });
+    });
+
+    return Number.isFinite(minGuardAngle) ? minGuardAngle * PARALLAX_GUARD_USAGE : 0;
+  }
+
+  function updateVirtualParallax(cameraInfo: Partial<CameraInfo> = currentCameraInfo): void {
+    currentParallaxForward.set(
+      Number(cameraInfo.forwardX ?? currentCameraInfo.forwardX ?? 0),
+      Number(cameraInfo.forwardY ?? currentCameraInfo.forwardY ?? 0),
+      Number(cameraInfo.forwardZ ?? currentCameraInfo.forwardZ ?? -1),
+    );
+
+    if (currentParallaxForward.lengthSq() <= 1e-8) {
+      currentParallaxForward.set(0, 0, -1);
+    } else {
+      currentParallaxForward.normalize();
+    }
+
+    if (!parallaxForwardInitialized) {
+      referenceParallaxForward.copy(currentParallaxForward);
+      parallaxForwardInitialized = true;
+    }
+
+    parallaxOffsetUniform.value
+      .copy(currentParallaxForward)
+      .sub(referenceParallaxForward)
+      .multiplyScalar(currentParallaxScale());
+  }
 
   function accumulationBytesPerPixel(): number {
     return accumulationType === THREE.HalfFloatType ? 8 : 4;
@@ -509,10 +566,12 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     stats.bakedStarLayerEnabled = layerState.bakedStars.enabled;
     stats.bakedStarLayerDrawCalls = layerState.bakedStars.enabled ? patchDescriptors.length : 0;
     stats.bakedStarLayerRadius = layerState.bakedStars.radius;
+    stats.bakedStarLayerStrength = layerState.bakedStars.params.uParallaxStrength;
     stats.bakedStarLayerDensity = layerState.bakedStars.params.uDensity;
     stats.bakedStarLayerSeed = layerState.bakedStars.params.uSeed;
     stats.bakedStarLayerStarCount = catalogStarCount(bakeUniforms);
     stats.overlayLayerDensity = layerState.brightOverlay.params.uDensity;
+    stats.overlayLayerStrength = layerState.brightOverlay.params.uParallaxStrength;
     stats.overlayLayerSeed = layerState.brightOverlay.params.uSeed;
     stats.overlayLayerStarCount = catalogStarCount(overlayUniforms);
     stats.winkleAmount = layerState.brightOverlay.params.uWinkleAmount;
@@ -754,6 +813,16 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
 
     if (!Number.isFinite(nextValue) || !setLayerParamValue(layerId, key, nextValue)) return;
 
+    if (key === "uParallaxStrength") {
+      if (layerId === "bakedStars") {
+        skydome.setMaterialUniformValue("uParallaxStrength", nextValue);
+      }
+      syncOverlayStats();
+      notifyReadouts();
+      requestRender();
+      return;
+    }
+
     if (layerId === "bakedStars") {
       if (CATALOG_PARAMS.has(key)) {
         markCatalogDirty("bakedStars");
@@ -835,35 +904,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       return nebulaLayer.getEnabled();
     }
     return Boolean(layerState[layerId]?.enabled);
-  }
-
-  function setLayerRadius(layerId: LayerId, value: number): void {
-    const nextRadius = Number(value);
-    if (!Number.isFinite(nextRadius) || nextRadius <= 0) return;
-
-    if (layerId === "skyBackground") {
-      nebulaLayer.setRadius(nextRadius);
-      return;
-    } else if (layerId === "bakedStars") {
-      layerState.bakedStars.radius = nextRadius;
-      skydome.setRadius(nextRadius, patchDescriptors);
-    } else if (layerId === "brightOverlay") {
-      layerState.brightOverlay.radius = nextRadius;
-      starLayers.setLayerRadius("brightOverlay", nextRadius);
-    } else {
-      return;
-    }
-
-    syncOverlayStats();
-    notifyReadouts();
-    requestRender();
-  }
-
-  function getLayerRadius(layerId: LayerId): number {
-    if (layerId === "skyBackground") {
-      return nebulaLayer.getRadius();
-    }
-    return layerState[layerId]?.radius ?? 0;
   }
 
   function setBrightStarOverlayEnabled(enabled: boolean): void {
@@ -948,8 +988,13 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     return true;
   }
 
-  function recordRender(): void {
+  function recordRender({
+    cameraInfo = currentCameraInfo,
+  }: {
+    cameraInfo?: Partial<CameraInfo>;
+  } = {}): void {
     stats.renders = Number(stats.renders ?? 0) + 1;
+    updateVirtualParallax(cameraInfo);
     starLayers.advanceRuntime();
     nebulaLayer.recordRender();
     if (skydome.activeBlendCount > 0 && skydome.advancePatchBlends()) {
@@ -1007,8 +1052,6 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     getReadouts,
     setLayerEnabled,
     getLayerEnabled,
-    setLayerRadius,
-    getLayerRadius,
     setLayerParam,
     getLayerParam,
     reseedLayer,
