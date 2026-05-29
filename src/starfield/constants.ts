@@ -80,6 +80,7 @@ export const BRIGHT_STAR_FRACTION = 0.1;
 export const AUTO_PATCH_GRIDS = [1, 2, 4, 8, 16];
 export const BASE_TARGET_POOL_BUCKETS = [128, 256, 512, 1024, 2048, 4096];
 export const FINAL_TEXTURE_BYTES_PER_PIXEL = 4;
+export const HDR_TEXTURE_BYTES_PER_PIXEL = 8;
 
 export const STAR_CLASSES = Object.freeze({
   TINY: 0,

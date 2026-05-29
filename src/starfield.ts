@@ -17,6 +17,7 @@ import {
   DEFAULT_WINKLE_SHARPNESS,
   DEFAULT_SKY_BACKGROUND_RADIUS,
   FALLBACK_STATES,
+  FINAL_TEXTURE_BYTES_PER_PIXEL,
   LIGHT_COMPOSITION_MAX_ANCHORS,
   MIN_BACKGROUND_SPHERE_SEGMENTS,
   PATCH_STATES,
@@ -181,6 +182,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   const maxTextureSize = targetManager.maxTextureSize;
   const accumulationType = targetManager.accumulationType;
   const accumulationTypeLabel = targetManager.halfFloatAccumulationSupported ? "HalfFloatType" : "UnsignedByteType";
+  const residentPatchBytesPerPixel = FINAL_TEXTURE_BYTES_PER_PIXEL + targetManager.backgroundTargetBytesPerPixel;
 
   const starScene = new THREE.Scene();
   const bakeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -211,7 +213,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     cameraInfo: currentCameraInfo,
     maxTextureSize,
     accumulationType,
-    residentLayerCount: 2,
+    residentBytesPerPixel: residentPatchBytesPerPixel,
   });
   const defaultStarParams: StarLayerParams = {
     uDensity: 360,
@@ -298,7 +300,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     THREE.RGBAFormat,
   );
   fallbackBackgroundTexture.name = "Fallback baked nebula patch";
-  fallbackBackgroundTexture.colorSpace = THREE.SRGBColorSpace;
+  fallbackBackgroundTexture.colorSpace = THREE.LinearSRGBColorSpace;
   fallbackBackgroundTexture.minFilter = THREE.LinearFilter;
   fallbackBackgroundTexture.magFilter = THREE.LinearFilter;
   fallbackBackgroundTexture.wrapS = THREE.ClampToEdgeWrapping;
@@ -401,7 +403,10 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     fallbackPatchTarget: fallbackBackgroundTarget,
     getSphereSegments: () => Math.max(currentSphereSegments, MIN_BACKGROUND_SPHERE_SEGMENTS),
     initialRadius: layerState.skyBackground.radius,
-    createMaterial: createBackgroundPatchDomeMaterial,
+    createMaterial: (args) => createBackgroundPatchDomeMaterial({
+      ...args,
+      nebulaExposure: backgroundUniforms.uNebulaExposure.value,
+    }),
     renderOrder: -10,
     onBlendStatsChange: () => {
       backgroundPipeline?.syncStats();
@@ -522,6 +527,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       targetManager,
       allocationBudgetBytes: STARFIELD_ALLOCATION_BUDGET_BYTES,
       residentLayerCount: 2,
+      residentBytesPerPixel: residentPatchBytesPerPixel,
       bakeScratchBytes: currentBakeScratchBytes(),
       queueState: pipeline.queueState(),
       activeBlendCount: skydome.activeBlendCount + backgroundSkydome.activeBlendCount,
@@ -582,7 +588,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       cameraInfo: currentCameraInfo,
       maxTextureSize,
       accumulationType,
-      residentLayerCount: 2,
+      residentBytesPerPixel: residentPatchBytesPerPixel,
     });
   }
 
@@ -653,6 +659,9 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       name,
       wrapS: descriptor.wrapS,
       wrapT: descriptor.wrapT,
+      type: targetManager.backgroundTargetType,
+      colorSpace: targetManager.backgroundTargetColorSpace,
+      bytesPerPixel: targetManager.backgroundTargetBytesPerPixel,
     });
     attachTargetSamplingMetadata(descriptor, target);
     return target;
@@ -732,6 +741,12 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     stats.backgroundNebulaStrength = backgroundUniforms.uNebulaStrength.value;
     stats.backgroundNebulaExposure = backgroundUniforms.uNebulaExposure.value;
     stats.backgroundLightIntensity = backgroundUniforms.uLightIntensity.value;
+    stats.backgroundOctaves = backgroundUniforms.uOctaves.value;
+    stats.backgroundTargetType = targetManager.backgroundTargetTypeLabel;
+    stats.backgroundTargetColorSpace = targetManager.backgroundTargetColorSpace;
+    stats.backgroundTargetBytesPerPixel = targetManager.backgroundTargetBytesPerPixel;
+    stats.backgroundHdrEnabled = targetManager.backgroundHdrEnabled;
+    stats.backgroundHdrFallback = !targetManager.backgroundHdrEnabled;
   }
 
   function syncOverlayStats(): void {
@@ -993,6 +1008,13 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     if (!Number.isFinite(nextValue) || !setLayerParamValue(layerId, key, nextValue)) return;
 
     if (layerId === "skyBackground") {
+      if (key === "uNebulaExposure") {
+        backgroundSkydome.setMaterialUniformValue("uNebulaExposure", nextValue);
+        syncOverlayStats();
+        notifyReadouts();
+        requestRender();
+        return;
+      }
       backgroundPipeline.markPatchDescriptorsStale("background");
       backgroundPipeline.scheduleBake(delay);
       syncOverlayStats();

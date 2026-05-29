@@ -103,6 +103,7 @@ interface StatsContext {
   targetManager: StatsTargetManager;
   allocationBudgetBytes?: number;
   residentLayerCount?: number;
+  residentBytesPerPixel?: number;
   bakeScratchBytes?: number;
   queueState: QueueState;
   activeBlendCount: number;
@@ -164,6 +165,12 @@ export function createInitialStats({
     backgroundNebulaStrength: defaults.backgroundParams?.uNebulaStrength ?? 0,
     backgroundNebulaExposure: defaults.backgroundParams?.uNebulaExposure ?? 0,
     backgroundLightIntensity: defaults.backgroundParams?.uLightIntensity ?? 0,
+    backgroundOctaves: 0,
+    backgroundTargetType: "unknown",
+    backgroundTargetColorSpace: "unknown",
+    backgroundTargetBytesPerPixel: 0,
+    backgroundHdrEnabled: false,
+    backgroundHdrFallback: true,
     bakedStarLayerEnabled: true,
     bakedStarLayerDrawCalls: defaultPatchLayout.patchCount,
     bakedStarLayerRadius: defaults.bakedStarsRadius,
@@ -326,6 +333,7 @@ export function computeMemoryReadouts(ctx: StatsContext, demand = computeDemandR
     allocationBudgetBytes,
     bakeScratchBytes,
     residentLayerCount = 1,
+    residentBytesPerPixel = FINAL_TEXTURE_BYTES_PER_PIXEL * residentLayerCount,
   } = ctx;
   const patchCount = Math.max(1, patchDescriptors.length);
   const residentTextureBytes = targetManager.activePatchTargetBytes();
@@ -344,8 +352,8 @@ export function computeMemoryReadouts(ctx: StatsContext, demand = computeDemandR
   const recommendedResidentTextureBytes = estimateTextureBytes(
     recommendedStorageWidth,
     recommendedStorageHeight,
-    FINAL_TEXTURE_BYTES_PER_PIXEL,
-  ) * patchCount * residentLayerCount;
+    residentBytesPerPixel,
+  ) * patchCount;
   const patchBudgetBytes = allocationBudgetBytes ?? STARFIELD_ALLOCATION_BUDGET_BYTES;
 
   return {

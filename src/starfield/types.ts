@@ -82,6 +82,8 @@ export interface PatchRenderTargetMetadata {
     key: string;
     inPool: boolean;
     bytesPerPixel: number;
+    type: THREE.TextureDataType;
+    colorSpace: THREE.ColorSpace;
   };
   starfieldSampling?: {
     innerOffset: THREE.Vector2;

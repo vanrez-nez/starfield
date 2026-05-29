@@ -145,6 +145,7 @@ function createPatchNodeMaterial({
     uniforms.uNextStorageUvMin = uNextStorageUvMin as unknown as UniformMap[string];
     uniforms.uNextStorageUvSize = uNextStorageUvSize as unknown as UniformMap[string];
   }
+  const uNebulaExposure = background ? numberUniform(uniforms, "uNebulaExposure") : null;
 
   const vDirection = varyingProperty("vec3", background ? "vBackgroundPatchDirection" : "vStarPatchDirection") as any;
   const material = new THREE.MeshBasicNodeMaterial({
@@ -194,7 +195,12 @@ function createPatchNodeMaterial({
 
     const currentColor = texture(uCurrentTexture, currentPatchUv);
     const nextColor = texture(uNextTexture, nextPatchUv);
-    return mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0));
+    const mixedColor = mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0));
+    if (background && uNebulaExposure) {
+      const mapped = vec3(1.0).sub(exp((max as any)(mixedColor.rgb, vec3(0.0)).mul(max(uNebulaExposure, 0.001)).negate()));
+      return vec4(mapped, 1.0);
+    }
+    return mixedColor;
   })();
 
   return material;
@@ -270,6 +276,28 @@ function equirectDirectionFromUvNode(rawUv: any): any {
   const theta = rawUv.y.mul(PI);
   const sinTheta = sin(theta);
   return normalize(vec3(sin(phi).mul(sinTheta), cos(theta), cos(phi).mul(sinTheta)));
+}
+
+function fbm01Node(pInput: any, octavesInput: any, lacunarityInput: any, gainInput: any): any {
+  const octaves = clamp(octavesInput, 1.0, 8.0);
+  const lacunarity = max(lacunarityInput, 0.001);
+  const gain = clamp(gainInput, 0.001, 0.999);
+  const p = vec3(pInput).toVar();
+  const amplitude = float(0.5).toVar();
+  const sum = float(0.0).toVar();
+  const norm = float(0.0).toVar();
+
+  Loop(8, ({ i }: any) => {
+    If(float(i).lessThan(octaves), () => {
+      const octaveNoise = mx_fractal_noise_float(p, int(1), lacunarity, gain).mul(0.5).add(0.5);
+      sum.addAssign(amplitude.mul(octaveNoise));
+      norm.addAssign(amplitude);
+      p.mulAssign(lacunarity);
+      amplitude.mulAssign(gain);
+    });
+  });
+
+  return sum.div(max(norm, 0.0001));
 }
 
 function hash11Node(p: any): any {
@@ -736,7 +764,6 @@ export function createLightCompositionBakeMaterial(uniforms: BackgroundUniforms)
   const uLightLining = numberUniform(uniformMap, "uLightLining");
   const uLightIntensity = numberUniform(uniformMap, "uLightIntensity");
   const uNebulaStrength = numberUniform(uniformMap, "uNebulaStrength");
-  const uNebulaExposure = numberUniform(uniformMap, "uNebulaExposure");
   const uCloudShadow = vec3Uniform(uniformMap, "uCloudShadow");
   const uCloudHighlight = vec3Uniform(uniformMap, "uCloudHighlight");
   const uCloudCore = vec3Uniform(uniformMap, "uCloudCore");
@@ -753,13 +780,13 @@ export function createLightCompositionBakeMaterial(uniforms: BackgroundUniforms)
     const fullscreenUv = positionGeometry.xy.mul(0.5).add(0.5);
     const skyUv = uTileUvMin.add(fullscreenUv.mul(uTileUvSize));
     const dir = equirectDirectionFromUvNode(skyUv);
-    const octaves = int(clamp(uOctaves, 1.0, 8.0));
+    const octaves = clamp(uOctaves, 1.0, 8.0);
 
     const warpP = dir.mul(max(uColorWarpFreq, 0.001)).add(vec3(uSeed, uSeed.mul(0.37), uSeed.mul(-0.21)));
     const warpVec = vec3(
-      mx_fractal_noise_float(warpP, octaves, 2.02, 0.52),
-      mx_fractal_noise_float(warpP.add(vec3(5.2, 1.3, 7.1)), octaves, 2.03, 0.50),
-      mx_fractal_noise_float(warpP.add(vec3(9.1, 8.4, 2.8)), octaves, 2.01, 0.51),
+      fbm01Node(warpP, octaves, 2.02, 0.52),
+      fbm01Node(warpP.add(vec3(5.2, 1.3, 7.1)), octaves, 2.03, 0.50),
+      fbm01Node(warpP.add(vec3(9.1, 8.4, 2.8)), octaves, 2.01, 0.51),
     ).mul(2.0).sub(1.0);
     const warpedDir = normalize(dir.add(warpVec.mul(max(uColorWarpAmp, 0.0))));
 
@@ -782,11 +809,11 @@ export function createLightCompositionBakeMaterial(uniforms: BackgroundUniforms)
     const seedOffset = vec3(uSeed.mul(13.17), uSeed.mul(-7.31), uSeed.mul(5.19));
     const p = dir.mul(max(uBaseScale, 0.001)).add(seedOffset);
     const q = vec3(
-      mx_fractal_noise_float(p, int(5), 2.02, 0.5),
-      mx_fractal_noise_float(p.add(vec3(5.2, 1.3, 2.8)), int(5), 2.02, 0.5),
-      mx_fractal_noise_float(p.add(vec3(2.1, 4.7, 9.2)), int(5), 2.02, 0.5),
-    ).mul(0.5).add(0.5);
-    const cloudNoise = clamp(mx_fractal_noise_float(p.add(q.mul(3.0)), int(5), 2.02, 0.5).mul(0.5).add(0.5), 0.0, 1.0);
+      fbm01Node(p, octaves, 2.02, 0.5),
+      fbm01Node(p.add(vec3(5.2, 1.3, 2.8)), octaves, 2.02, 0.5),
+      fbm01Node(p.add(vec3(2.1, 4.7, 9.2)), octaves, 2.02, 0.5),
+    );
+    const cloudNoise = clamp(fbm01Node(p.add(q.mul(3.0)), octaves, 2.02, 0.5), 0.0, 1.0);
     const coverage = clamp(uCoverage, 0.02, 0.98);
     const density = pow(clamp(smoothstep(coverage, coverage.add(max(uSoftness, 0.001)), cloudNoise), 0.0, 1.0), max(uContrast, 0.05));
     const lightMask = clamp(max(max(lightField.r, lightField.g), lightField.b).mul(max(uLightIntensity, 0.0)), 0.0, 1.0);
@@ -799,8 +826,7 @@ export function createLightCompositionBakeMaterial(uniforms: BackgroundUniforms)
     const alpha = clamp(density.mul(uOpacity), 0.0, 1.0);
     const baseLinear = vec3(0.004, 0.005, 0.011);
     const colorLinear = baseLinear.add(nebulaRgb.mul(alpha).mul(max(uNebulaStrength, 0.0)));
-    const mapped = vec3(1.0).sub(exp((max as any)(colorLinear, vec3(0.0)).mul(max(uNebulaExposure, 0.001)).negate()));
-    return vec4(mapped, 1.0);
+    return vec4((max as any)(colorLinear, vec3(0.0)), 1.0);
   })();
 
   return material;
@@ -836,9 +862,11 @@ export function createPatchDomeMaterial({
 export function createBackgroundPatchDomeMaterial({
   descriptor,
   visibleTarget,
+  nebulaExposure = 1,
 }: {
   descriptor: PatchDescriptor;
   visibleTarget: VisiblePatchTarget;
+  nebulaExposure?: number;
 }): StarfieldMaterial {
   const sampling = visibleTarget.starfieldSampling ?? {
     innerOffset: descriptor.innerOffset,
@@ -862,6 +890,7 @@ export function createBackgroundPatchDomeMaterial({
       uCurrentStorageUvSize: { value: sampling.storageUvSize.clone() },
       uNextStorageUvMin: { value: sampling.storageUvMin.clone() },
       uNextStorageUvSize: { value: sampling.storageUvSize.clone() },
+      uNebulaExposure: { value: nebulaExposure },
     },
     background: true,
   });

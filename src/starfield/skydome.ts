@@ -249,6 +249,17 @@ export function createSkydomeManager({
     requestRender();
   }
 
+  function setMaterialUniformValue(key: string, value: unknown): void {
+    bakedDomeGroup.children.forEach((child) => {
+      const mesh = child as THREE.Mesh<THREE.BufferGeometry, StarfieldMaterial>;
+      const uniformValue = mesh.material?.uniforms?.[key];
+      if (uniformValue) {
+        uniformValue.value = value as never;
+      }
+    });
+    requestRender();
+  }
+
   function clearBlendForDescriptor(descriptor: PatchDescriptor): void {
     activePatchBlends.delete(descriptor);
     descriptor.blendActive = false;
@@ -306,6 +317,7 @@ export function createSkydomeManager({
     clearBlendForDescriptor,
     setVisible,
     setRadius,
+    setMaterialUniformValue,
     rebuildBakedDomeMeshes,
     disposeBakedDomeMeshes,
     advancePatchBlends,

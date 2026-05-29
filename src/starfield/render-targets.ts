@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 import {
   BASE_TARGET_POOL_BUCKETS,
   FINAL_TEXTURE_BYTES_PER_PIXEL,
+  HDR_TEXTURE_BYTES_PER_PIXEL,
   estimateTextureBytes,
 } from "./constants";
 import type { PatchRenderTarget, StarfieldStats } from "./types";
@@ -12,10 +13,12 @@ interface RenderTargetOptions {
   name?: string;
   wrapS?: THREE.Wrapping;
   wrapT?: THREE.Wrapping;
+  bytesPerPixel?: number;
 }
 
 type TargetPoolMap = Map<string, PatchRenderTarget[]>;
 type BucketCounts = Record<string, number>;
+type PatchPoolState = NonNullable<PatchRenderTarget["starfieldPool"]>;
 
 function rendererBackend(renderer: THREE.Renderer): Record<string, unknown> {
   return (renderer as unknown as { backend?: Record<string, unknown> }).backend ?? {};
@@ -42,15 +45,33 @@ function backendExtensionAvailable(renderer: THREE.Renderer, name: string): bool
   return Boolean(extensions?.get?.(name));
 }
 
+function bytesPerPixelForType(type: THREE.TextureDataType): number {
+  if (type === THREE.HalfFloatType) return HDR_TEXTURE_BYTES_PER_PIXEL;
+  if (type === THREE.FloatType) return 16;
+  return FINAL_TEXTURE_BYTES_PER_PIXEL;
+}
+
+function textureTypeLabel(type: THREE.TextureDataType): string {
+  if (type === THREE.HalfFloatType) return "HalfFloatType";
+  if (type === THREE.FloatType) return "FloatType";
+  if (type === THREE.UnsignedByteType) return "UnsignedByteType";
+  return String(type);
+}
+
 export function createRenderTargetManager({ renderer }: { renderer: THREE.Renderer }) {
   const backend = rendererBackend(renderer);
   const maxTextureSize = detectMaxTextureSize(renderer);
   const webgpuBackend = backend.isWebGPUBackend === true;
   const webglBackend = backend.isWebGLBackend === true;
   const floatBlendSupported = webgpuBackend || backendExtensionAvailable(renderer, "EXT_float_blend");
+  const halfFloatRenderTargetSupported = webgpuBackend
+    || (webglBackend && backendExtensionAvailable(renderer, "EXT_color_buffer_float"));
   const halfFloatAccumulationSupported = webgpuBackend
     || (webglBackend && backendExtensionAvailable(renderer, "EXT_color_buffer_float") && floatBlendSupported);
   const accumulationType = halfFloatAccumulationSupported ? THREE.HalfFloatType : THREE.UnsignedByteType;
+  const backgroundTargetType = halfFloatRenderTargetSupported ? THREE.HalfFloatType : THREE.UnsignedByteType;
+  const backgroundTargetBytesPerPixel = bytesPerPixelForType(backgroundTargetType);
+  const backgroundTargetColorSpace = THREE.LinearSRGBColorSpace;
   const targetPoolBuckets = maxTextureSize >= 8192
     ? [...BASE_TARGET_POOL_BUCKETS, 8192]
     : BASE_TARGET_POOL_BUCKETS.filter((bucket) => bucket <= maxTextureSize);
@@ -65,6 +86,7 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
       name = "Baked equirectangular skydome starfield",
       wrapS = THREE.ClampToEdgeWrapping,
       wrapT = THREE.ClampToEdgeWrapping,
+      bytesPerPixel = bytesPerPixelForType(type),
     } = options;
     const target = new THREE.RenderTarget(width, height, {
       format: THREE.RGBAFormat,
@@ -78,11 +100,20 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
       wrapT,
     });
 
-    target.texture.name = name;
-    target.texture.colorSpace = colorSpace;
-    target.texture.generateMipmaps = false;
+    const patchTarget = target as PatchRenderTarget;
+    patchTarget.texture.name = name;
+    patchTarget.texture.colorSpace = colorSpace;
+    patchTarget.texture.generateMipmaps = false;
+    patchTarget.starfieldPool = {
+      bucket: targetPoolBucketForStorage(width, height),
+      key: "",
+      inPool: false,
+      bytesPerPixel,
+      type,
+      colorSpace,
+    };
     allocationCount += 1;
-    return target as PatchRenderTarget;
+    return patchTarget;
   }
 
   function createAccumulationTarget(width: number, height: number): PatchRenderTarget {
@@ -109,16 +140,23 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
     return Math.min(maxTextureSize, targetSize);
   }
 
-  function targetPoolKey(width: number, height: number, wrapS: THREE.Wrapping, wrapT: THREE.Wrapping): string {
+  function targetPoolKey(
+    width: number,
+    height: number,
+    wrapS: THREE.Wrapping,
+    wrapT: THREE.Wrapping,
+    type: THREE.TextureDataType,
+    colorSpace: THREE.ColorSpace,
+  ): string {
     const bucket = targetPoolBucketForStorage(width, height);
-    return `${bucket}:${Math.round(width)}x${Math.round(height)}:${wrapS}:${wrapT}`;
+    return `${bucket}:${Math.round(width)}x${Math.round(height)}:${wrapS}:${wrapT}:${textureTypeLabel(type)}:${colorSpace}`;
   }
 
   function patchTargetBytes(target: PatchRenderTarget): number {
     return estimateTextureBytes(
       renderTargetWidth(target),
       renderTargetHeight(target),
-      FINAL_TEXTURE_BYTES_PER_PIXEL,
+      target.starfieldPool?.bytesPerPixel ?? bytesPerPixelForType(target.texture.type),
     );
   }
 
@@ -127,18 +165,26 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
       name = "Baked skydome patch",
       wrapS = THREE.ClampToEdgeWrapping,
       wrapT = THREE.ClampToEdgeWrapping,
+      type = THREE.UnsignedByteType,
+      colorSpace = THREE.SRGBColorSpace,
+      bytesPerPixel = bytesPerPixelForType(type),
     } = options;
     const target = createRenderTarget(width, height, {
       name,
       wrapS,
       wrapT,
+      type,
+      colorSpace,
+      bytesPerPixel,
     });
     const bucket = targetPoolBucketForStorage(width, height);
     target.starfieldPool = {
       bucket,
-      key: targetPoolKey(width, height, wrapS, wrapT),
+      key: targetPoolKey(width, height, wrapS, wrapT, type, colorSpace),
       inPool: false,
-      bytesPerPixel: FINAL_TEXTURE_BYTES_PER_PIXEL,
+      bytesPerPixel,
+      type,
+      colorSpace,
     };
     return target;
   }
@@ -155,20 +201,26 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
       name = "Baked skydome patch",
       wrapS = THREE.ClampToEdgeWrapping,
       wrapT = THREE.ClampToEdgeWrapping,
+      type = THREE.UnsignedByteType,
+      colorSpace = THREE.SRGBColorSpace,
+      bytesPerPixel = bytesPerPixelForType(type),
     } = options;
-    const key = targetPoolKey(width, height, wrapS, wrapT);
+    const key = targetPoolKey(width, height, wrapS, wrapT, type, colorSpace);
     const pool = targetPoolListFor(key);
-    const target = pool.pop() ?? createPatchRenderTarget(width, height, { name, wrapS, wrapT });
+    const target = pool.pop() ?? createPatchRenderTarget(width, height, { name, wrapS, wrapT, type, colorSpace, bytesPerPixel });
 
     target.texture.name = name;
     target.texture.wrapS = wrapS;
     target.texture.wrapT = wrapT;
+    target.texture.colorSpace = colorSpace;
     target.starfieldPool = {
       ...target.starfieldPool,
       bucket: targetPoolBucketForStorage(width, height),
       key,
       inPool: false,
-      bytesPerPixel: FINAL_TEXTURE_BYTES_PER_PIXEL,
+      bytesPerPixel,
+      type,
+      colorSpace,
     };
     activePatchTargets.add(target);
     return target;
@@ -178,15 +230,22 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
     if (!target || target.starfieldPool?.inPool) return;
 
     activePatchTargets.delete(target);
-    const poolState = target.starfieldPool ?? {
+    const existingPool: PatchPoolState | undefined = target.starfieldPool;
+    const textureType = existingPool?.type ?? target.texture.type;
+    const textureColorSpace = (existingPool?.colorSpace ?? target.texture.colorSpace) as THREE.ColorSpace;
+    const poolState = existingPool ?? {
       bucket: targetPoolBucketForStorage(renderTargetWidth(target), renderTargetHeight(target)),
       key: targetPoolKey(
         renderTargetWidth(target),
         renderTargetHeight(target),
         target.texture.wrapS,
         target.texture.wrapT,
+        textureType,
+        textureColorSpace,
       ),
-      bytesPerPixel: FINAL_TEXTURE_BYTES_PER_PIXEL,
+      bytesPerPixel: bytesPerPixelForType(textureType),
+      type: textureType,
+      colorSpace: textureColorSpace,
       inPool: false,
     };
     target.starfieldPool = {
@@ -292,8 +351,14 @@ export function createRenderTargetManager({ renderer }: { renderer: THREE.Render
   return {
     maxTextureSize,
     floatBlendSupported,
+    halfFloatRenderTargetSupported,
     halfFloatAccumulationSupported,
     accumulationType,
+    backgroundTargetType,
+    backgroundTargetTypeLabel: textureTypeLabel(backgroundTargetType),
+    backgroundTargetBytesPerPixel,
+    backgroundTargetColorSpace,
+    backgroundHdrEnabled: backgroundTargetType === THREE.HalfFloatType,
     targetPoolBuckets,
     createRenderTarget,
     createAccumulationTarget,

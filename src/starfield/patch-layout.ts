@@ -45,7 +45,7 @@ interface CandidateMemoryArgs {
   patchCount: number;
   supersample: number;
   accumulationBytes: number;
-  residentLayerCount?: number;
+  residentBytesPerPixel?: number;
 }
 
 type CandidateMemoryBaseArgs = Omit<CandidateMemoryArgs, "supersample">;
@@ -65,7 +65,7 @@ interface MemoryBoundCandidateArgs {
   maxTextureSize: number;
   budgetBytes: number;
   accumulationBytes: number;
-  residentLayerCount?: number;
+  residentBytesPerPixel?: number;
 }
 
 interface MemoryBoundCandidate {
@@ -152,9 +152,9 @@ function candidateMemory({
   patchCount,
   supersample,
   accumulationBytes,
-  residentLayerCount = 1,
+  residentBytesPerPixel = FINAL_TEXTURE_BYTES_PER_PIXEL,
 }: CandidateMemoryArgs): Omit<SupersampleChoice, "supersample" | "peakBudgetRatio"> {
-  const residentBytes = estimateTextureBytes(storageWidth, storageHeight, FINAL_TEXTURE_BYTES_PER_PIXEL) * patchCount * residentLayerCount;
+  const residentBytes = estimateTextureBytes(storageWidth, storageHeight, residentBytesPerPixel) * patchCount;
   const scratchBytes = estimateTextureBytes(
     storageWidth * supersample,
     storageHeight * supersample,
@@ -174,7 +174,7 @@ function chooseSupersample({
   budgetBytes,
   maxTextureSize,
   accumulationBytes,
-  residentLayerCount = 1,
+  residentBytesPerPixel = FINAL_TEXTURE_BYTES_PER_PIXEL,
 }: CandidateMemoryBaseArgs & { budgetBytes: number; maxTextureSize: number }): SupersampleChoice {
   const maxSupersample = Math.max(1, Math.min(
     MAX_AUTO_SUPERSAMPLE,
@@ -189,7 +189,7 @@ function chooseSupersample({
       patchCount,
       supersample,
       accumulationBytes,
-      residentLayerCount,
+      residentBytesPerPixel,
     });
     if (memory.peakBytes <= budgetBytes || supersample === 1) {
       return {
@@ -208,7 +208,7 @@ function chooseSupersample({
       patchCount,
       supersample: 1,
       accumulationBytes,
-      residentLayerCount,
+      residentBytesPerPixel,
     }),
     peakBudgetRatio: 1,
   };
@@ -221,7 +221,7 @@ function buildMemoryBoundCandidate({
   maxTextureSize,
   budgetBytes,
   accumulationBytes,
-  residentLayerCount = 1,
+  residentBytesPerPixel = FINAL_TEXTURE_BYTES_PER_PIXEL,
 }: MemoryBoundCandidateArgs): MemoryBoundCandidate {
   const guard = grid === 1 ? 0 : PATCH_GUARD_TEXELS;
   const maxContentWidth = Math.max(1, maxTextureSize - guard * 2);
@@ -249,7 +249,7 @@ function buildMemoryBoundCandidate({
       budgetBytes,
       maxTextureSize,
       accumulationBytes,
-      residentLayerCount,
+      residentBytesPerPixel,
     });
     result = {
       contentWidth,
@@ -280,7 +280,7 @@ function buildMemoryBoundCandidate({
         budgetBytes,
         maxTextureSize,
         accumulationBytes,
-        residentLayerCount,
+        residentBytesPerPixel,
       }),
       scale,
     };
@@ -301,11 +301,13 @@ export function createAutoPatchLayout({
   maxTextureSize,
   accumulationType = THREE.UnsignedByteType,
   residentLayerCount = 1,
+  residentBytesPerPixel = FINAL_TEXTURE_BYTES_PER_PIXEL * residentLayerCount,
 }: {
   cameraInfo: CameraInfo;
   maxTextureSize: number;
   accumulationType?: THREE.TextureDataType;
   residentLayerCount?: number;
+  residentBytesPerPixel?: number;
 }): PatchLayout {
   const screenWidth = Math.max(1, Number(cameraInfo.screenWidth) || 1);
   const screenHeight = Math.max(1, Number(cameraInfo.screenHeight) || 1);
@@ -328,7 +330,7 @@ export function createAutoPatchLayout({
     maxTextureSize,
     budgetBytes,
     accumulationBytes,
-    residentLayerCount,
+    residentBytesPerPixel,
   });
   const budgetExceeded = candidate.allocation.peakBytes > budgetBytes;
 
