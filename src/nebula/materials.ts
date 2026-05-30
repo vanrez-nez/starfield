@@ -289,8 +289,11 @@ export function createNebulaPatchDomeMaterial({
     ), 0.0, 1.0);
 
     const currentColor = texture(uCurrentTexture, currentPatchUv);
-    const nextColor = texture(uNextTexture, nextPatchUv);
-    const mixedColor = mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0));
+    const mixedColor = currentColor.toVar();
+    If(uBlend.greaterThan(0.0001), () => {
+      const nextColor = texture(uNextTexture, nextPatchUv);
+      mixedColor.assign(mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0)));
+    });
     const mapped = vec3(1.0).sub(exp((max as any)(mixedColor.rgb, vec3(0.0)).mul(max(uNebulaExposure, 0.001)).negate()));
     return vec4(mapped, 1.0);
   })();

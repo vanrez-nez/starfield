@@ -1,8 +1,10 @@
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import "./styles.css";
+import { STARFIELD_CONFIG } from "./config";
 import { createControls } from "./controls";
 import { createGpuStarfield } from "./gpu-starfield";
+import { createFramePerformanceMonitor, type FrameStageDurations, type FrameStageName } from "./performance-monitor";
 import { createStarfield } from "./starfield";
 import type { CameraInfo, StarfieldStats } from "./starfield/types";
 
@@ -47,6 +49,17 @@ const drawingBufferSize = new THREE.Vector2();
 const cameraForward = new THREE.Vector3();
 const timer = new THREE.Timer();
 timer.connect(document);
+const targetFrameDelta = 1 / Math.max(1, STARFIELD_CONFIG.internal.performanceTargetFps);
+const targetFrameBudgetMs = 1000 / Math.max(1, STARFIELD_CONFIG.internal.performanceTargetFps);
+let visualElapsedTime = 0;
+const frameStages: FrameStageDurations = {};
+let frameStageStartMs = 0;
+const frameMonitor = createFramePerformanceMonitor({
+  targetFps: STARFIELD_CONFIG.internal.performanceTargetFps,
+  historySeconds: STARFIELD_CONFIG.internal.performanceHistorySeconds,
+});
+window.starfieldPerfHistory = frameMonitor.history;
+window.resetStarfieldPerfHistory = frameMonitor.reset;
 
 function verticalFovForViewport(horizontalFov: number, aspect: number): number {
   const horizontalRadians = THREE.MathUtils.degToRad(horizontalFov);
@@ -60,11 +73,13 @@ const orbitCamera = new THREE.PerspectiveCamera(camera.fov, camera.aspect, camer
 orbitCamera.position.set(0, 0, 1);
 
 const state = {
-  animationFrame: 0,
   resizePending: false,
   width: window.innerWidth,
   height: window.innerHeight,
   pixelRatio: Math.min(window.devicePixelRatio, 2),
+};
+const performanceProbeOptions = {
+  skipRenderSubmit: false,
 };
 
 let starfield: ReturnType<typeof createStarfield>;
@@ -133,26 +148,65 @@ function cameraInfo({ screen = false }: { screen?: boolean } = {}): CameraInfo {
   return { ...updateCameraInfoCache({ screen }) };
 }
 
-function renderFrame(): void {
-  applyResizeIfNeeded();
-  timer.update();
-  const delta = timer.getDelta();
-  orbitControls.update();
-  syncRenderCameraFromOrbit();
-  const frameCameraInfo = updateCameraInfoCache();
-  gpuStarfield.recordRender({
-    delta,
-    elapsedTime: timer.getElapsed(),
-    cameraInfo: frameCameraInfo,
-  });
-  starfield.recordRender({ cameraInfo: frameCameraInfo });
-  renderer.render(scene, camera);
-  uiControls.updateFps(delta);
+function pacedAnimationDelta(rawDeltaSeconds: number): number {
+  const rawDeltaMs = Math.max(0, rawDeltaSeconds * 1000);
+  const frameSlots = rawDeltaMs >= targetFrameBudgetMs * 1.5
+    ? Math.max(1, Math.round(rawDeltaMs / targetFrameBudgetMs))
+    : 1;
+  return targetFrameDelta * frameSlots;
 }
 
-function animationLoop(): void {
-  renderFrame();
-  state.animationFrame = requestAnimationFrame(animationLoop);
+function resetFrameStages(): void {
+  frameStages.resize = 0;
+  frameStages.timer = 0;
+  frameStages.orbit = 0;
+  frameStages.camera = 0;
+  frameStages.gpuField = 0;
+  frameStages.starfield = 0;
+  frameStages.render = 0;
+  frameStages.ui = 0;
+  frameStageStartMs = performance.now();
+}
+
+function markStage(stage: FrameStageName): void {
+  const nowMs = performance.now();
+  frameStages[stage] = nowMs - frameStageStartMs;
+  frameStageStartMs = nowMs;
+}
+
+function renderFrame(timestampMs: DOMHighResTimeStamp): void {
+  resetFrameStages();
+  applyResizeIfNeeded();
+  markStage("resize");
+  timer.update(timestampMs);
+  const delta = timer.getDelta();
+  const visualDelta = pacedAnimationDelta(delta);
+  visualElapsedTime += visualDelta;
+  markStage("timer");
+  orbitControls.update();
+  markStage("orbit");
+  syncRenderCameraFromOrbit();
+  const frameCameraInfo = updateCameraInfoCache();
+  markStage("camera");
+  gpuStarfield.recordRender({
+    delta: visualDelta,
+    elapsedTime: visualElapsedTime,
+    cameraInfo: frameCameraInfo,
+  });
+  markStage("gpuField");
+  starfield.recordRender({ elapsedTime: visualElapsedTime, cameraInfo: frameCameraInfo });
+  markStage("starfield");
+  if (!performanceProbeOptions.skipRenderSubmit) {
+    renderer.render(scene, camera);
+  }
+  markStage("render");
+  uiControls.updateFps(delta);
+  markStage("ui");
+  frameMonitor.record(delta, frameStages, timestampMs);
+}
+
+function animationLoop(timestampMs: DOMHighResTimeStamp): void {
+  renderFrame(timestampMs);
 }
 
 function requestRuntimeRender(): void {
@@ -189,9 +243,14 @@ uiControls = createControls({
     return {
       ...starfield.collectStats(renderer.info, cameraInfo({ screen: true }), options),
       ...gpuStarfield.collectStats(),
+      ...frameMonitor.collectStats(),
     };
   },
   onRecenter: recenter,
+  resetPerformanceHistory: frameMonitor.reset,
+  setPerformanceProbeOptions(options: { skipRenderSubmit?: boolean }): void {
+    performanceProbeOptions.skipRenderSubmit = Boolean(options.skipRenderSubmit);
+  },
 });
 
 orbitControls.addEventListener("start", () => {
@@ -233,10 +292,13 @@ function resize(): void {
 
 window.addEventListener("resize", resize);
 window.addEventListener("beforeunload", () => {
-  cancelAnimationFrame(state.animationFrame);
+  renderer.setAnimationLoop(null);
   uiControls.dispose();
   orbitControls.dispose();
   timer.dispose();
+  frameMonitor.dispose();
+  delete window.starfieldPerfHistory;
+  delete window.resetStarfieldPerfHistory;
   gpuStarfield.dispose();
   starfield.dispose();
   renderer.dispose();
@@ -244,5 +306,7 @@ window.addEventListener("beforeunload", () => {
 
 applyResizeIfNeeded({ force: true });
 starfield.bakeNow();
-state.animationFrame = requestAnimationFrame(animationLoop);
+timer.reset();
+visualElapsedTime = 0;
+renderer.setAnimationLoop(animationLoop);
 }

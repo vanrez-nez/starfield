@@ -311,13 +311,12 @@ export function createStarLayerManager({
     requestRender();
   }
 
-  function advanceRuntime(): boolean {
+  function advanceRuntime(elapsedTime = 0): boolean {
     const flashiness = overlayUniforms.uWinkleFlashiness?.value ?? 0;
     const effectsActive = brightOverlayEnabled && currentWinkleAmount > 0 && (winkleOverlay.mesh.visible || flashiness > 0);
     if (!effectsActive) return false;
-    const time = performance.now() * 0.001;
-    brightOverlayUniforms.uTime.value = time;
-    winkleUniforms.uTime.value = time;
+    brightOverlayUniforms.uTime.value = elapsedTime;
+    winkleUniforms.uTime.value = elapsedTime;
     return true;
   }
 

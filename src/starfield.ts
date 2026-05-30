@@ -25,6 +25,7 @@ import {
   createAutoPatchLayout,
   createPatchDescriptors as createPatchDescriptorList,
   maxDescriptorPrecisionSize,
+  normalizeBakeCoverageConfig,
   patchGridLabel,
 } from "./starfield/patch-layout";
 import {
@@ -55,6 +56,7 @@ import {
 } from "./nebula";
 import type { NebulaLayerApi } from "./nebula";
 import type {
+  BakeCoverage,
   BakeUniforms,
   CameraInfo,
   DownsampleUniforms,
@@ -76,6 +78,7 @@ type BakePipeline = ReturnType<typeof createBakePipeline>;
 type DemandReadouts = ReturnType<typeof computeDemandReadoutsFromStats>;
 
 const PARALLAX_GUARD_USAGE = 0.45;
+type BakeCoverageKey = keyof BakeCoverage;
 
 interface CreateStarfieldArgs {
   renderer: THREE.Renderer;
@@ -118,6 +121,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   let pendingAutoLayoutKey = "";
   let pendingDisplaySwap: PendingDisplaySwap | null = null;
   let layoutInitialized = false;
+  let bakeCoverage: BakeCoverage = normalizeBakeCoverageConfig(STARFIELD_CONFIG.bakeCoverage);
   let currentCameraInfo: CameraInfo = {
     horizontalFov: 60,
     verticalFov: 60,
@@ -136,6 +140,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     maxTextureSize,
     accumulationType,
     residentBytesPerPixel: residentPatchBytesPerPixel,
+    coverage: bakeCoverage,
   });
   const layerState: StarfieldLayerState = {
     bakedStars: {
@@ -265,10 +270,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     fallbackPatchTarget,
     getSphereSegments: () => SKYDOME_SPHERE_SEGMENTS,
     initialRadius: layerState.bakedStars.radius,
-    geometryUvRangeForDescriptor: (descriptor) => ({
-      uvMin: descriptor.storageUvMin,
-      uvSize: descriptor.storageUvSize,
-    }),
+    geometryUvRangeForDescriptor: starPatchGeometryUvRange,
     createMaterial: (args) => createPatchDomeMaterial({
       ...args,
       parallaxUniforms: {
@@ -341,6 +343,26 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     });
 
     return Number.isFinite(minGuardAngle) ? minGuardAngle * PARALLAX_GUARD_USAGE : 0;
+  }
+
+  function starPatchGeometryUvRange(descriptor: PatchDescriptor): { uvMin: THREE.Vector2; uvSize: THREE.Vector2 } {
+    const contentMinX = descriptor.uvMin.x;
+    const contentMinY = descriptor.uvMin.y;
+    const contentMaxX = descriptor.uvMin.x + descriptor.uvSize.x;
+    const contentMaxY = descriptor.uvMin.y + descriptor.uvSize.y;
+    const storageMinX = descriptor.storageUvMin.x;
+    const storageMinY = descriptor.storageUvMin.y;
+    const storageMaxX = descriptor.storageUvMin.x + descriptor.storageUvSize.x;
+    const storageMaxY = descriptor.storageUvMin.y + descriptor.storageUvSize.y;
+    const minX = descriptor.hasLeftNeighbor ? storageMinX : contentMinX;
+    const maxX = descriptor.hasRightNeighbor ? storageMaxX : contentMaxX;
+    const minY = descriptor.hasTopNeighbor ? storageMinY : contentMinY;
+    const maxY = descriptor.hasBottomNeighbor ? storageMaxY : contentMaxY;
+
+    return {
+      uvMin: new THREE.Vector2(minX, minY),
+      uvSize: new THREE.Vector2(maxX - minX, maxY - minY),
+    };
   }
 
   function updateVirtualParallax(cameraInfo: Partial<CameraInfo> = currentCameraInfo): void {
@@ -452,6 +474,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       `guard:${layout.guard}`,
       `content:${layout.contentWidth}x${layout.contentHeight}`,
       `ss:${layout.supersample ?? 1}`,
+      `coverage:${layout.coverage.azimuthCenterDeg}/${layout.coverage.altitudeCenterDeg}/${layout.coverage.azimuthSpanDeg}/${layout.coverage.altitudeSpanDeg}`,
     ].join("|");
   }
 
@@ -461,7 +484,17 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
       maxTextureSize,
       accumulationType,
       residentBytesPerPixel: residentPatchBytesPerPixel,
+      coverage: bakeCoverage,
     });
+  }
+
+  function syncBakeCoverageStats(): void {
+    stats.coverageAzimuthCenterDeg = bakeCoverage.azimuthCenterDeg;
+    stats.coverageAltitudeCenterDeg = bakeCoverage.altitudeCenterDeg;
+    stats.coverageAzimuthSpanDeg = bakeCoverage.azimuthSpanDeg;
+    stats.coverageAltitudeSpanDeg = bakeCoverage.altitudeSpanDeg;
+    stats.coverageFraction = currentPatchLayout.coverageFraction;
+    stats.coverageProjection = "equirect";
   }
 
   function plannedDescriptorContentSize(descriptor: PatchDescriptor) {
@@ -660,6 +693,7 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   function updatePatchStats(): void {
     updatePatchStatsFromStats(makeStatsContext());
     updateDemandStats();
+    syncBakeCoverageStats();
   }
 
   function descriptorsNeedingScreenLayerBake(): PatchDescriptor[] {
@@ -923,6 +957,39 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     return brightStarOverlayEnabled;
   }
 
+  function clampBakeCoverageValue(key: BakeCoverageKey, value: number): number {
+    if (key === "azimuthSpanDeg") return THREE.MathUtils.clamp(value, 1, 360);
+    if (key === "altitudeSpanDeg") return THREE.MathUtils.clamp(value, 1, 180);
+    if (key === "altitudeCenterDeg") return THREE.MathUtils.clamp(value, -90, 90);
+    return value;
+  }
+
+  function setBakeCoverage(values: Partial<BakeCoverage>, delay = 450): void {
+    const nextCoverageInput = { ...bakeCoverage };
+    (Object.keys(values) as BakeCoverageKey[]).forEach((key) => {
+      const nextValue = clampBakeCoverageValue(key, Number(values[key]));
+      if (!Number.isFinite(nextValue)) return;
+      nextCoverageInput[key] = nextValue;
+    });
+    const nextCoverage = normalizeBakeCoverageConfig(nextCoverageInput);
+    const changed = (Object.keys(nextCoverage) as BakeCoverageKey[])
+      .some((key) => bakeCoverage[key] !== nextCoverage[key]);
+
+    if (!changed) return;
+    bakeCoverage = nextCoverage;
+    syncBakeCoverageStats();
+    scheduleAutomaticPatchLayout("coverage", delay);
+    notifyReadouts();
+  }
+
+  function setBakeCoverageParam(key: BakeCoverageKey, value: number, delay = 450): void {
+    setBakeCoverage({ [key]: value } as Partial<BakeCoverage>, delay);
+  }
+
+  function getBakeCoverageParam(key: BakeCoverageKey): number {
+    return bakeCoverage[key];
+  }
+
   function reseed(): void {
     reseedLayer("bakedStars");
   }
@@ -989,13 +1056,15 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
   }
 
   function recordRender({
+    elapsedTime = 0,
     cameraInfo = currentCameraInfo,
   }: {
+    elapsedTime?: number;
     cameraInfo?: Partial<CameraInfo>;
   } = {}): void {
     stats.renders = Number(stats.renders ?? 0) + 1;
     updateVirtualParallax(cameraInfo);
-    starLayers.advanceRuntime();
+    starLayers.advanceRuntime(elapsedTime);
     nebulaLayer.recordRender();
     if (skydome.activeBlendCount > 0 && skydome.advancePatchBlends()) {
       requestRender();
@@ -1055,6 +1124,9 @@ export function createStarfield({ renderer, scene, requestRender }: CreateStarfi
     setLayerParam,
     getLayerParam,
     reseedLayer,
+    setBakeCoverage,
+    setBakeCoverageParam,
+    getBakeCoverageParam,
     setBrightStarOverlayEnabled,
     getBrightStarOverlayEnabled,
     reseed,

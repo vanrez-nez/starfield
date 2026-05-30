@@ -1,6 +1,7 @@
 import * as THREE from "three/webgpu";
 import {
   BRIGHT_STAR_FRACTION,
+  FOREGROUND_OVERLAY_MAX_STARS,
   BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS,
   STAR_CLASSES,
   STAR_CATALOG_BASE_DENSITY,
@@ -327,11 +328,12 @@ export function createCatalogOverlayAndStats({
     return a.cellId.localeCompare(b.cellId);
   });
 
+  const activeOverlayStars = overlayStars.slice(0, FOREGROUND_OVERLAY_MAX_STARS);
   const overlayDirections: number[] = [];
   const overlayRandoms: number[] = [];
   const overlaySizeGates: number[] = [];
   const overlayClasses: number[] = [];
-  overlayStars.forEach((star) => {
+  activeOverlayStars.forEach((star) => {
     overlayDirections.push(star.x, star.y, star.z);
     overlayRandoms.push(star.rSize, star.rBright, star.rGlare, star.rColor);
     overlaySizeGates.push(star.rSizeGate);
@@ -360,6 +362,6 @@ export function createCatalogOverlayAndStats({
     classStats: finalizedClassStats,
     geometry: nextOverlayGeometry,
     overlayGeometry: nextOverlayGeometry,
-    overlayStars,
+    overlayStars: activeOverlayStars,
   };
 }

@@ -137,6 +137,10 @@ function createPatchNodeMaterial({
   const uCurrentStorageUvSize = patchVectorUniform(uniforms.uCurrentStorageUvSize.value as THREE.Vector2) as any;
   const uNextStorageUvMin = patchVectorUniform(uniforms.uNextStorageUvMin.value as THREE.Vector2) as any;
   const uNextStorageUvSize = patchVectorUniform(uniforms.uNextStorageUvSize.value as THREE.Vector2) as any;
+  const uHasLeftNeighbor = numberUniform(uniforms, "uHasLeftNeighbor");
+  const uHasRightNeighbor = numberUniform(uniforms, "uHasRightNeighbor");
+  const uHasTopNeighbor = numberUniform(uniforms, "uHasTopNeighbor");
+  const uHasBottomNeighbor = numberUniform(uniforms, "uHasBottomNeighbor");
   const uParallaxStrength = numberUniform(uniforms, "uParallaxStrength");
   const uParallaxOffset = vec3Uniform(uniforms, "uParallaxOffset");
   uniforms.uCurrentTexture = uCurrentTexture as unknown as UniformMap[string];
@@ -193,24 +197,29 @@ function createPatchNodeMaterial({
       vec2(0.0),
     );
     const safeGuardFrac = (max as any)(guardFrac, vec2(1e-6));
-    const leftOwner = smoothstep(safeGuardFrac.x.negate(), safeGuardFrac.x, contentLocalUv.x);
-    const rightOwner = float(1.0).sub(smoothstep(float(1.0).sub(safeGuardFrac.x), float(1.0).add(safeGuardFrac.x), contentLocalUv.x));
+    const leftOwner = (select as any)(
+      uHasLeftNeighbor.greaterThan(0.5),
+      smoothstep(safeGuardFrac.x.negate(), safeGuardFrac.x, contentLocalUv.x),
+      1.0,
+    );
+    const rightOwner = (select as any)(
+      uHasRightNeighbor.greaterThan(0.5),
+      float(1.0).sub(smoothstep(float(1.0).sub(safeGuardFrac.x), float(1.0).add(safeGuardFrac.x), contentLocalUv.x)),
+      1.0,
+    );
     const horizontalOwner = (select as any)(
       guardFrac.x.lessThanEqual(0.0),
       1.0,
       leftOwner.mul(rightOwner),
     );
 
-    const hasTopNeighbor = uContentUvMin.y.greaterThan(0.0);
-    const contentBottom = uContentUvMin.y.add(uContentUvSize.y);
-    const hasBottomNeighbor = contentBottom.lessThan(1.0);
     const topOwner = (select as any)(
-      hasTopNeighbor,
+      uHasTopNeighbor.greaterThan(0.5),
       smoothstep(safeGuardFrac.y.negate(), safeGuardFrac.y, contentLocalUv.y),
       1.0,
     );
     const bottomOwner = (select as any)(
-      hasBottomNeighbor,
+      uHasBottomNeighbor.greaterThan(0.5),
       float(1.0).sub(smoothstep(float(1.0).sub(safeGuardFrac.y), float(1.0).add(safeGuardFrac.y), contentLocalUv.y)),
       1.0,
     );
@@ -221,8 +230,12 @@ function createPatchNodeMaterial({
     );
     const ownership = clamp(horizontalOwner.mul(verticalOwner), 0.0, 1.0);
     const currentColor = texture(uCurrentTexture, currentPatchUv).mul(currentSampleMask);
-    const nextColor = texture(uNextTexture, nextPatchUv).mul(nextSampleMask);
-    return mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0)).mul(ownership);
+    const mixedColor = currentColor.toVar();
+    If(uBlend.greaterThan(0.0001), () => {
+      const nextColor = texture(uNextTexture, nextPatchUv).mul(nextSampleMask);
+      mixedColor.assign(mix(currentColor, nextColor, clamp(uBlend, 0.0, 1.0)));
+    });
+    return mixedColor.mul(ownership);
   })();
 
   return material;
@@ -788,6 +801,10 @@ export function createPatchDomeMaterial({
       uCurrentStorageUvSize: { value: sampling.storageUvSize.clone() },
       uNextStorageUvMin: { value: sampling.storageUvMin.clone() },
       uNextStorageUvSize: { value: sampling.storageUvSize.clone() },
+      uHasLeftNeighbor: { value: descriptor.hasLeftNeighbor ? 1 : 0 },
+      uHasRightNeighbor: { value: descriptor.hasRightNeighbor ? 1 : 0 },
+      uHasTopNeighbor: { value: descriptor.hasTopNeighbor ? 1 : 0 },
+      uHasBottomNeighbor: { value: descriptor.hasBottomNeighbor ? 1 : 0 },
       uParallaxStrength: { value: parallaxUniforms?.strength.value ?? 0 },
       uParallaxOffset: { value: parallaxUniforms?.offset.value ?? new THREE.Vector3() },
     },

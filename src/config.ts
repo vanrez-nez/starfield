@@ -1,5 +1,5 @@
 import type { FieldGradient, NebulaParams } from "./nebula/types";
-import type { GpuStarfieldParams, StarLayerParams } from "./starfield/types";
+import type { BakeCoverage, GpuStarfieldParams, StarLayerParams } from "./starfield/types";
 
 interface LayerConfig<Id extends string, P extends Record<string, unknown>> {
   id: Id;
@@ -14,6 +14,12 @@ interface GpuFieldConfig {
 }
 
 export const STARFIELD_CONFIG = {
+  bakeCoverage: {
+    azimuthCenterDeg: 0,
+    altitudeCenterDeg: 0,
+    azimuthSpanDeg: 360,
+    altitudeSpanDeg: 180,
+  } satisfies BakeCoverage,
   background: {
     id: "skyBackground",
     enabled: true,
@@ -131,10 +137,15 @@ export const STARFIELD_CONFIG = {
     brightStarOverlayEnabled: true,
     brightStarOverlayExcludesBakedStars: false,
     brightStarOverlayStrength: 0.38,
+    foregroundOverlayMaxStars: 4096,
     winkleMaxCount: 128,
     maxBakeJobsPerFrame: 1,
     cameraBakeIdleMs: 450,
     patchCrossfadeMs: 260,
+    performanceTargetFps: 165,
+    performanceHistorySeconds: 10,
+    performanceProbeSampleMs: 3500,
+    performanceProbeSettleMs: 250,
     densityFallbackStarsPerPixel: 0.25,
     brightStarFraction: 0.1,
     autoPatchGrids: [1, 2, 4, 8, 16],

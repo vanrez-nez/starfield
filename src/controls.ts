@@ -1,6 +1,6 @@
 import { Pane, type ButtonApi, type FolderApi, type TabPageApi } from "tweakpane";
 import { STARFIELD_CONFIG } from "./config";
-import type { GpuStarfieldApi, GpuStarfieldParams, StarfieldStats } from "./starfield/types";
+import type { BakeCoverage, GpuStarfieldApi, GpuStarfieldParams, StarfieldStats } from "./starfield/types";
 
 const GPU_FIELD_LAYER_ID = STARFIELD_CONFIG.gpuField.id;
 
@@ -11,9 +11,16 @@ type RangeFormatFn = (value: number) => string;
 type ControlLayerId = "skyBackground" | "bakedStars" | "brightOverlay" | typeof GPU_FIELD_LAYER_ID;
 type StarfieldControlLayerId = Exclude<ControlLayerId, typeof GPU_FIELD_LAYER_ID>;
 type PaneContainer = FolderApi | TabPageApi;
+type BakeCoverageKey = keyof BakeCoverage;
 
 interface RefreshableBinding {
   refresh(): void;
+}
+
+interface DiagnosticBindingState {
+  binding: RefreshableBinding;
+  folder: FolderApi;
+  lastRefreshAt: number;
 }
 
 interface LayerGroupControl {
@@ -52,6 +59,9 @@ interface StarfieldControlApi {
   getLayerParam(layerId: StarfieldControlLayerId, key: string): ControlValue;
   setLayerParam(layerId: StarfieldControlLayerId, key: string, value: number, delay?: number): void;
   reseedLayer(layerId: StarfieldControlLayerId): void;
+  setBakeCoverage(values: Partial<BakeCoverage>, delay?: number): void;
+  setBakeCoverageParam(key: BakeCoverageKey, value: number, delay?: number): void;
+  getBakeCoverageParam(key: BakeCoverageKey): number;
   bakeNow(): void;
   setBakeStatusHandler(handler: (label: string, disabled?: boolean) => void): void;
   setReadoutsChangeHandler(handler: () => void): void;
@@ -63,6 +73,8 @@ interface CreateControlsArgs {
   gpuStarfield: GpuStarfieldApi;
   getStats: (options?: { detail?: "panel" | "debug" }) => StarfieldStats;
   onRecenter: () => void;
+  resetPerformanceHistory: () => void;
+  setPerformanceProbeOptions: (options: { skipRenderSubmit?: boolean }) => void;
 }
 
 interface StatsGroup {
@@ -73,6 +85,54 @@ interface StatsGroup {
 interface FrameSample {
   delta: number;
 }
+
+interface PerfProbeScenario {
+  name: string;
+  overrides: Partial<Record<ControlLayerId, boolean>>;
+  hideUx?: boolean;
+  pauseDiagnostics?: boolean;
+  pauseFpsUi?: boolean;
+  skipRenderSubmit?: boolean;
+  params?: Array<{
+    layer: ControlLayerId;
+    key: string;
+    value: number | boolean;
+  }>;
+}
+
+interface ClippingPreset {
+  azimuthCenterDeg: number;
+  altitudeCenterDeg: number;
+  azimuthSpanDeg: number;
+  altitudeSpanDeg: number;
+}
+
+const CLIPPING_PRESETS = {
+  Full: {
+    azimuthCenterDeg: 0,
+    altitudeCenterDeg: 0,
+    azimuthSpanDeg: 360,
+    altitudeSpanDeg: 180,
+  },
+  "Upper Half": {
+    azimuthCenterDeg: 0,
+    altitudeCenterDeg: 45,
+    azimuthSpanDeg: 360,
+    altitudeSpanDeg: 90,
+  },
+  "Lower Half": {
+    azimuthCenterDeg: 0,
+    altitudeCenterDeg: -45,
+    azimuthSpanDeg: 360,
+    altitudeSpanDeg: 90,
+  },
+  "Front Half": {
+    azimuthCenterDeg: 0,
+    altitudeCenterDeg: 0,
+    azimuthSpanDeg: 180,
+    altitudeSpanDeg: 180,
+  },
+} satisfies Record<string, ClippingPreset>;
 
 const STAR_LAYER_CONTROLS: LayerControl[] = [
   { type: "group", label: "Field" },
@@ -159,10 +219,75 @@ const LAYER_TABS: LayerTabConfig[] = [
   },
 ];
 
-const STATS_PANEL_REFRESH_MS = 250;
-const FPS_ROLLING_WINDOW_SECONDS = 1.25;
-const FPS_SMOOTHING_SECONDS = 0.28;
+const STATS_PANEL_REFRESH_MS = 500;
+const STATS_PANEL_SLOW_REFRESH_MS = 2000;
+const FRAME_PACING_DIAGNOSTIC_KEY = "frame_pacing";
+const PERF_PROBE_DIAGNOSTIC_KEY = "perf_probe";
+const FPS_ROLLING_WINDOW_SECONDS = 1.5;
+const FPS_UPDATE_INTERVAL_MS = 100;
+const FPS_DELTA_CLAMP_SECONDS = 1;
 const FPS_GRAPH_MAX = 240;
+const FPS_SMOOTHING_ALPHA = 0.18;
+const PERF_PROBE_SAMPLE_MS = STARFIELD_CONFIG.internal.performanceProbeSampleMs;
+const PERF_PROBE_SETTLE_MS = STARFIELD_CONFIG.internal.performanceProbeSettleMs;
+const PERF_PROBE_SCENARIOS: PerfProbeScenario[] = [
+  { name: "Baseline", overrides: {} },
+  { name: "No Diagnostics", overrides: {}, pauseDiagnostics: true },
+  { name: "No FPS UI", overrides: {}, pauseFpsUi: true },
+  { name: "UX Hidden", overrides: {}, hideUx: true },
+  { name: "No Nebula", overrides: { skyBackground: false } },
+  { name: "No Stars Bg", overrides: { bakedStars: false } },
+  { name: "No Particles", overrides: { [GPU_FIELD_LAYER_ID]: false } },
+  { name: "No Stars Fg", overrides: { brightOverlay: false } },
+  {
+    name: "No Winkles",
+    overrides: {},
+    params: [{ layer: "brightOverlay", key: "uWinkleAmount", value: 0 }],
+  },
+  {
+    name: "Overlay Density 180",
+    overrides: {},
+    params: [{ layer: "brightOverlay", key: "uDensity", value: 180 }],
+  },
+  {
+    name: "Overlay Density 120",
+    overrides: {},
+    params: [{ layer: "brightOverlay", key: "uDensity", value: 120 }],
+  },
+  {
+    name: "Overlay Density 90",
+    overrides: {},
+    params: [{ layer: "brightOverlay", key: "uDensity", value: 90 }],
+  },
+  {
+    name: "Overlay Density 60",
+    overrides: {},
+    params: [{ layer: "brightOverlay", key: "uDensity", value: 60 }],
+  },
+  {
+    name: "All Runtime Off",
+    overrides: {
+      skyBackground: false,
+      bakedStars: false,
+      [GPU_FIELD_LAYER_ID]: false,
+      brightOverlay: false,
+    },
+  },
+  { name: "No Render Submit", overrides: {}, skipRenderSubmit: true },
+  {
+    name: "Loop Only",
+    overrides: {
+      skyBackground: false,
+      bakedStars: false,
+      [GPU_FIELD_LAYER_ID]: false,
+      brightOverlay: false,
+    },
+    skipRenderSubmit: true,
+    pauseDiagnostics: true,
+    pauseFpsUi: true,
+    hideUx: true,
+  },
+];
 
 function formatNumber(value: unknown, digits = 1): string {
   const numeric = Number(value);
@@ -190,6 +315,29 @@ function formatSizeWithOptimal(value: unknown, optimal: unknown, capped: unknown
 
 function formatGpuStatsForPanel(stats: StarfieldStats): string {
   return [
+    "Frame Pacing",
+    `Target: ${formatNumber(stats.perfTargetFps, 0)} FPS (${formatNumber(stats.perfFrameBudgetMs, 2)}ms)`,
+    `Cadence Epsilon: ${formatNumber(stats.perfCadenceMissEpsilonMs, 2)}ms`,
+    `History: ${formatNumber(stats.perfHistorySeconds, 0)}s / ${formatInteger(stats.perfFrameCount)} frames`,
+    `Dropped Slots: ${formatInteger(stats.perfDroppedFrames)} / ${formatInteger(stats.perfExpectedFrames)} (${formatPercent(stats.perfDropRate)})`,
+    `Deadline Misses: ${formatInteger(stats.perfDeadlineMissFrames)} (${formatPercent(stats.perfDeadlineMissRate)})`,
+    `Cadence Jitter: ${formatInteger(stats.perfCadenceMissFrames)} (${formatPercent(stats.perfCadenceMissRate)})`,
+    `Jitter Avg/P95: ${formatNumber(stats.perfAverageCadenceJitterMs, 3)} / ${formatNumber(stats.perfP95CadenceJitterMs, 3)}ms`,
+    `Overrun: ${formatNumber(stats.perfCadenceOverrunMs, 2)}ms total / ${formatNumber(stats.perfAverageCadenceOverrunMs, 3)}ms avg`,
+    `Dropped-Frame Hitches: ${formatInteger(stats.perfHitchFrames)} (${formatPercent(stats.perfHitchRate)})`,
+    `Long Tasks: ${formatInteger(stats.perfLongTaskCount)} / ${formatNumber(stats.perfLongTaskTotalMs, 1)}ms total / ${formatNumber(stats.perfLongTaskMaxMs, 1)}ms max`,
+    `Recent Long Tasks: ${stats.perfLongTaskSummary ?? "none"}`,
+    `FPS Avg/P95: ${formatNumber(stats.perfAverageFps, 1)} / ${formatNumber(stats.perfPacedFps, 1)}`,
+    `Frame Avg/P95/P99/Max: ${formatNumber(stats.perfAverageFrameMs, 2)} / ${formatNumber(stats.perfP95FrameMs, 2)} / ${formatNumber(stats.perfP99FrameMs, 2)} / ${formatNumber(stats.perfMaxFrameMs, 2)}ms`,
+    `Worst Stage: ${stats.perfWorstStage ?? "none"}`,
+    `Stage P95: ${stats.perfStageP95Summary ?? "none"}`,
+    `Stage Max: ${stats.perfStageMaxSummary ?? "none"}`,
+    "",
+    "Perf Probe",
+    `Status: ${stats.perfProbeStatus ?? "idle"}`,
+    `Sample: ${formatNumber(stats.perfProbeSampleMs, 0)}ms`,
+    `${stats.perfProbeResults ?? "No probe results yet."}`,
+    "",
     "GPU Stats",
     `Memory: ${stats.estimatedTextureMemory}`,
     `Draws/Frame: ${stats.callFrames}`,
@@ -232,7 +380,8 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     `Stars Fg Strength: ${formatNumber(stats.overlayLayerStrength, 2)}`,
     `Overlay Density: ${formatInteger(stats.overlayLayerDensity)}`,
     `Overlay Seed: ${formatNumber(stats.overlayLayerSeed, 0)}`,
-    `Overlay Count: ${formatInteger(stats.overlayLayerStarCount)}`,
+    `Overlay Catalog: ${formatInteger(stats.overlayLayerStarCount)}`,
+    `Overlay Active: ${formatInteger(stats.overlayStarCount)}`,
     `Overlay Draws: ${formatInteger(stats.overlayDrawCalls)}`,
     `Winkle Amount: ${formatNumber(stats.winkleAmount, 2)}`,
     `Effect Min Size: ${formatNumber(stats.effectMinSize, 2)}`,
@@ -244,6 +393,10 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     `Winkle Tris: ${formatInteger(stats.winkleTriangles)}`,
     "",
     "Bake",
+    `Coverage Projection: ${stats.coverageProjection ?? "equirect"}`,
+    `Coverage Azimuth: ${formatNumber(stats.coverageAzimuthSpanDeg ?? 360, 0)}deg @ ${formatNumber(stats.coverageAzimuthCenterDeg ?? 0, 0)}deg`,
+    `Coverage Altitude: ${formatNumber(stats.coverageAltitudeSpanDeg ?? 180, 0)}deg @ ${formatNumber(stats.coverageAltitudeCenterDeg ?? 0, 0)}deg`,
+    `Coverage Fraction: ${formatPercent(stats.coverageFraction ?? 1)}`,
     `Auto Virtual: ${formatSizeWithOptimal(stats.autoVirtualSize ?? stats.virtualSize, stats.optimalVirtualSize, stats.autoVirtualSizeCapped)}`,
     `Ideal Virtual: ${stats.idealVirtualSize ?? stats.optimalVirtualSize ?? "0x0"}`,
     `Effective Virtual: ${stats.effectiveVirtualSize ?? stats.autoVirtualSize ?? stats.virtualSize ?? "0x0"}`,
@@ -319,6 +472,7 @@ function formatGpuStatsForPanel(stats: StarfieldStats): string {
     `Density Candidates: ${formatInteger(stats.densityCandidateStarCount)}`,
     `Baked Candidates: ${formatInteger(stats.bakedCandidateStarCount)}`,
     `Overlay Candidates: ${formatInteger(stats.overlayCandidateStarCount)}`,
+    `Overlay Active Cap: ${formatInteger(STARFIELD_CONFIG.internal.foregroundOverlayMaxStars)}`,
     `Overlay Enabled: ${stats.overlayEnabled ? "yes" : "no"}`,
     `Overlay Stars: ${formatInteger(stats.overlayStarCount)}`,
     `Overlay Instances: ${formatInteger(stats.overlayStarInstances)}`,
@@ -438,7 +592,15 @@ function statsBindingRows(lines: string[]): number {
   return Math.min(18, Math.max(4, lines.length + 1));
 }
 
-export function createControls({ container, starfield, gpuStarfield, getStats, onRecenter }: CreateControlsArgs) {
+export function createControls({
+  container,
+  starfield,
+  gpuStarfield,
+  getStats,
+  onRecenter,
+  resetPerformanceHistory,
+  setPerformanceProbeOptions,
+}: CreateControlsArgs) {
   const pane = new Pane({ title: "Starfield", container });
   const paneState: Record<ControlLayerId, PaneState> = {
     skyBackground: {},
@@ -447,10 +609,23 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     brightOverlay: {},
   };
   const diagnosticState: PaneState = {};
-  const diagnosticBindings = new Map<string, RefreshableBinding>();
+  const diagnosticBindings = new Map<string, DiagnosticBindingState>();
   const layerBindings = new Map<string, RefreshableBinding>();
   const actionState: PaneState = { bakeStatus: "Idle" };
+  const perfProbeState = {
+    running: false,
+    status: "Idle",
+    results: "No probe results yet.",
+  };
   const fpsState: PaneState = { fps: 0 };
+  const clippingState: PaneState = {
+    preset: "Full",
+    azimuthCenterDeg: starfield.getBakeCoverageParam("azimuthCenterDeg"),
+    altitudeCenterDeg: starfield.getBakeCoverageParam("altitudeCenterDeg"),
+    azimuthSpanDeg: starfield.getBakeCoverageParam("azimuthSpanDeg"),
+    altitudeSpanDeg: starfield.getBakeCoverageParam("altitudeSpanDeg"),
+  };
+  const clippingBindings = new Map<BakeCoverageKey | "preset", RefreshableBinding>();
   const fpsSamples: FrameSample[] = [];
 
   let uxVisible = true;
@@ -458,10 +633,19 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
   let statsRefreshTimer = 0;
   let lastStatsRefreshAt = 0;
   let fpsDeltaSum = 0;
-  let smoothedFps = 0;
+  let lastFpsUpdateAt = 0;
   let lastFpsLabel = "";
+  let smoothedFps = 0;
   let fpsBinding: RefreshableBinding | null = null;
   let bakeButton: ButtonApi;
+  let perfProbeButton: ButtonApi;
+  let diagnosticsPage: TabPageApi | null = null;
+  let diagnosticsTabSelected = false;
+  let syncingClippingState = false;
+  let applyingClippingPreset = false;
+  let clippingPresetTimer = 0;
+  let diagnosticsPausedForProbe = false;
+  let fpsUiPausedForProbe = false;
 
   function isGpuFieldLayer(layer: string): layer is typeof GPU_FIELD_LAYER_ID {
     return layer === GPU_FIELD_LAYER_ID;
@@ -510,32 +694,116 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     binding.refresh();
   }
 
+  function syncLayerEnabledBinding(layer: ControlLayerId): void {
+    if (layer === "skyBackground") {
+      syncLayerBinding(layer, "skyBackgroundEnabled");
+    } else if (layer === "bakedStars") {
+      syncLayerBinding(layer, "bakedStarsEnabled");
+    } else if (layer === "brightOverlay") {
+      syncLayerBinding(layer, "brightOverlayEnabled");
+    } else {
+      syncLayerBinding(layer, "enabled");
+    }
+  }
+
   function syncOverlayControls(): void {
     const enabled = starfield.getLayerEnabled("brightOverlay");
     paneState.brightOverlay.brightOverlayEnabled = enabled;
     syncLayerBinding("brightOverlay", "brightOverlayEnabled");
   }
 
+  function syncClippingBinding(key: BakeCoverageKey | "preset"): void {
+    clippingBindings.get(key)?.refresh();
+  }
+
+  function syncClippingStateFromRuntime(): void {
+    syncingClippingState = true;
+    ([
+      "azimuthCenterDeg",
+      "altitudeCenterDeg",
+      "azimuthSpanDeg",
+      "altitudeSpanDeg",
+    ] as BakeCoverageKey[]).forEach((key) => {
+      clippingState[key] = starfield.getBakeCoverageParam(key);
+      syncClippingBinding(key);
+    });
+    syncingClippingState = false;
+  }
+
+  function setClippingValues(values: Partial<BakeCoverage>, delay = 450, presetName?: string): void {
+    if (presetName) {
+      applyingClippingPreset = true;
+      window.clearTimeout(clippingPresetTimer);
+    }
+    (Object.keys(values) as BakeCoverageKey[]).forEach((key) => {
+      const value = values[key];
+      if (typeof value !== "number") return;
+      clippingState[key] = value;
+    });
+    starfield.setBakeCoverage(values, delay);
+    syncClippingStateFromRuntime();
+    if (presetName) {
+      clippingState.preset = presetName;
+      syncClippingBinding("preset");
+      clippingPresetTimer = window.setTimeout(() => {
+        applyingClippingPreset = false;
+        clippingState.preset = presetName;
+        syncClippingBinding("preset");
+      }, 80);
+    }
+    refreshDiagnostics();
+  }
+
   function collectStatsForPane(options: { detail?: "panel" | "debug" } = {}): StarfieldStats {
     updatingDiagnostics = true;
     try {
-      return getStats(options);
+      return {
+        ...getStats(options),
+        perfProbeStatus: perfProbeState.status,
+        perfProbeResults: perfProbeState.results,
+        perfProbeSampleMs: PERF_PROBE_SAMPLE_MS,
+      };
     } finally {
       updatingDiagnostics = false;
     }
   }
 
-  function updateDiagnostics(stats: StarfieldStats): void {
+  function updateDiagnostics(
+    stats: StarfieldStats,
+    options: { force?: boolean; keys?: Set<string> } = {},
+  ): void {
+    const now = performance.now();
     const groups = createStatsGroups(stats);
     groups.forEach((group) => {
       const key = diagnosticsKey(group.title);
-      diagnosticState[key] = group.lines.join("\n");
-      diagnosticBindings.get(key)?.refresh();
+      const state = diagnosticBindings.get(key);
+      if (!state) return;
+
+      const isFramePacing = key === FRAME_PACING_DIAGNOSTIC_KEY;
+      const isPerfProbe = key === PERF_PROBE_DIAGNOSTIC_KEY;
+      const forceGroup = Boolean(options.keys?.has(key) || (options.force && !options.keys));
+      const interval = isFramePacing ? STATS_PANEL_REFRESH_MS : STATS_PANEL_SLOW_REFRESH_MS;
+      const shouldRefresh = forceGroup
+        || (state.folder.expanded && !isPerfProbe && now - state.lastRefreshAt >= interval);
+      if (!shouldRefresh) return;
+
+      const nextText = group.lines.join("\n");
+      if (diagnosticState[key] !== nextText) {
+        diagnosticState[key] = nextText;
+        state.binding.refresh();
+      }
+      state.lastRefreshAt = now;
     });
   }
 
-  function refreshDiagnostics({ force = false }: { force?: boolean } = {}): void {
-    if (updatingDiagnostics || !uxVisible) return;
+  function refreshDiagnostics({
+    force = false,
+    keys,
+  }: {
+    force?: boolean;
+    keys?: Set<string>;
+  } = {}): void {
+    if (updatingDiagnostics || !uxVisible || !diagnosticsTabSelected || diagnosticsPausedForProbe) return;
     const now = performance.now();
     const elapsed = now - lastStatsRefreshAt;
 
@@ -550,15 +818,15 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     }
 
     lastStatsRefreshAt = now;
-    updateDiagnostics(collectStatsForPane({ detail: "panel" }));
+    updateDiagnostics(collectStatsForPane({ detail: "panel" }), { force, keys });
     scheduleNextDiagnosticsRefresh();
   }
 
   function scheduleNextDiagnosticsRefresh(): void {
-    if (statsRefreshTimer || !uxVisible) return;
+    if (statsRefreshTimer || !uxVisible || !diagnosticsTabSelected || diagnosticsPausedForProbe) return;
     statsRefreshTimer = window.setTimeout(() => {
       statsRefreshTimer = 0;
-      refreshDiagnostics({ force: true });
+      refreshDiagnostics();
     }, STATS_PANEL_REFRESH_MS);
   }
 
@@ -568,7 +836,7 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     clearTimeout(statsRefreshTimer);
     statsRefreshTimer = 0;
 
-    if (uxVisible) {
+    if (uxVisible && diagnosticsTabSelected) {
       refreshDiagnostics({ force: true });
       return;
     }
@@ -599,9 +867,109 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     pane.refresh();
   }
 
+  function setPerfProbeStatus(status: string): void {
+    perfProbeState.status = status;
+    if (perfProbeButton) {
+      perfProbeButton.title = perfProbeState.running ? status : "Run Perf Probe";
+      perfProbeButton.disabled = perfProbeState.running;
+    }
+    refreshDiagnostics({ force: true, keys: new Set([PERF_PROBE_DIAGNOSTIC_KEY]) });
+  }
+
+  function setLayerEnabledForProbe(layer: ControlLayerId, enabled: boolean): void {
+    setLayerEnabled(layer, enabled);
+    syncLayerEnabledBinding(layer);
+  }
+
+  function syncLayerParamBinding(layer: ControlLayerId, key: string): void {
+    syncLayerBinding(layer, key);
+  }
+
+  function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  function formatProbeLine(name: string, stats: StarfieldStats): string {
+    return [
+      `${name}:`,
+      `${formatNumber(stats.perfPacedFps, 1)} FPS p95`,
+      `${formatPercent(stats.perfDropRate)} dropped slots`,
+      `${formatPercent(stats.perfDeadlineMissRate)} deadline miss`,
+      `${formatPercent(stats.perfCadenceMissRate)} cadence jitter`,
+      `${formatNumber(stats.perfP95FrameMs, 2)}ms p95`,
+      `${formatNumber(stats.perfMaxFrameMs, 2)}ms max`,
+      `${formatInteger(stats.perfLongTaskCount)} long tasks`,
+      `worst ${stats.perfWorstStage ?? "none"}`,
+    ].join(" ");
+  }
+
+  async function runPerfProbe(): Promise<void> {
+    if (perfProbeState.running) return;
+    perfProbeState.running = true;
+    const originalStates: Record<ControlLayerId, boolean> = {
+      skyBackground: getLayerEnabled("skyBackground"),
+      bakedStars: getLayerEnabled("bakedStars"),
+      [GPU_FIELD_LAYER_ID]: getLayerEnabled(GPU_FIELD_LAYER_ID),
+      brightOverlay: getLayerEnabled("brightOverlay"),
+    };
+    const originalUxVisible = uxVisible;
+    const originalParams = new Map<string, number | boolean>();
+    const results: string[] = [];
+
+    try {
+      setPerfProbeStatus("Preparing probe");
+      for (const scenario of PERF_PROBE_SCENARIOS) {
+        setPerfProbeStatus(`Probe: ${scenario.name}`);
+        diagnosticsPausedForProbe = Boolean(scenario.pauseDiagnostics);
+        fpsUiPausedForProbe = Boolean(scenario.pauseFpsUi);
+        setPerformanceProbeOptions({ skipRenderSubmit: Boolean(scenario.skipRenderSubmit) });
+        setUxVisible(scenario.hideUx ? false : originalUxVisible);
+        (Object.keys(originalStates) as ControlLayerId[]).forEach((layer) => {
+          const nextEnabled = scenario.overrides[layer] ?? originalStates[layer];
+          setLayerEnabledForProbe(layer, nextEnabled);
+        });
+        scenario.params?.forEach(({ layer, key, value }) => {
+          const mapKey = `${layer}:${key}`;
+          if (!originalParams.has(mapKey)) {
+            originalParams.set(mapKey, getLayerParam(layer, key));
+          }
+          setLayerParam(layer, key, Number(value), 0);
+          syncLayerParamBinding(layer, key);
+        });
+        await wait(PERF_PROBE_SETTLE_MS);
+        resetPerformanceHistory();
+        await wait(PERF_PROBE_SAMPLE_MS);
+        const stats = collectStatsForPane({ detail: "panel" });
+        results.push(formatProbeLine(scenario.name, stats));
+        perfProbeState.results = results.join("\n");
+        refreshDiagnostics({ force: true, keys: new Set([PERF_PROBE_DIAGNOSTIC_KEY]) });
+      }
+      perfProbeState.status = "Complete";
+    } finally {
+      (Object.keys(originalStates) as ControlLayerId[]).forEach((layer) => {
+        setLayerEnabledForProbe(layer, originalStates[layer]);
+      });
+      originalParams.forEach((value, mapKey) => {
+        const [layer, key] = mapKey.split(":") as [ControlLayerId, string];
+        setLayerParam(layer, key, Number(value), 0);
+        syncLayerParamBinding(layer, key);
+      });
+      diagnosticsPausedForProbe = false;
+      fpsUiPausedForProbe = false;
+      setPerformanceProbeOptions({ skipRenderSubmit: false });
+      setUxVisible(originalUxVisible);
+      resetPerformanceHistory();
+      perfProbeState.running = false;
+      setPerfProbeStatus(perfProbeState.status === "Complete" ? "Complete" : "Interrupted");
+    }
+  }
+
   function updateFps(deltaSeconds: number): void {
+    if (fpsUiPausedForProbe) return;
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
-    const clampedDelta = Math.min(deltaSeconds, 0.25);
+    const clampedDelta = Math.min(deltaSeconds, FPS_DELTA_CLAMP_SECONDS);
     fpsSamples.push({ delta: clampedDelta });
     fpsDeltaSum += clampedDelta;
 
@@ -610,9 +978,16 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
       if (sample) fpsDeltaSum -= sample.delta;
     }
 
-    const rollingFps = fpsSamples.length / Math.max(fpsDeltaSum, 1 / FPS_GRAPH_MAX);
-    const alpha = 1 - Math.exp(-clampedDelta / FPS_SMOOTHING_SECONDS);
-    smoothedFps = smoothedFps > 0 ? smoothedFps + (rollingFps - smoothedFps) * alpha : rollingFps;
+    const now = performance.now();
+    if (now - lastFpsUpdateAt < FPS_UPDATE_INTERVAL_MS && fpsSamples.length > 1) return;
+    lastFpsUpdateAt = now;
+
+    const averageDelta = fpsSamples.length > 0 ? fpsDeltaSum / fpsSamples.length : clampedDelta;
+    const rollingFps = Math.min(FPS_GRAPH_MAX, 1 / Math.max(averageDelta, 1 / FPS_GRAPH_MAX));
+    smoothedFps = smoothedFps > 0
+      ? smoothedFps + (rollingFps - smoothedFps) * FPS_SMOOTHING_ALPHA
+      : rollingFps;
+
     fpsState.fps = smoothedFps;
     const nextLabel = `FPS (${Math.round(smoothedFps)})`;
     if (nextLabel !== lastFpsLabel && fpsBinding && "label" in fpsBinding) {
@@ -629,7 +1004,7 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
       binding.on("change", (event) => {
         setLayerEnabled(layer, Boolean(event.value));
         if (layer === "brightOverlay") syncOverlayControls();
-        refreshDiagnostics({ force: true });
+        refreshDiagnostics();
       });
       return;
     }
@@ -666,13 +1041,13 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
       page.addButton({ title: "Reseed Baked" }).on("click", () => {
         starfield.reseedLayer("bakedStars");
         syncLayerBinding("bakedStars", "uSeed");
-        refreshDiagnostics({ force: true });
+        refreshDiagnostics();
       });
     } else if (tab.id === "brightOverlay") {
       page.addButton({ title: "Reseed Overlay" }).on("click", () => {
         starfield.reseedLayer("brightOverlay");
         syncLayerBinding("brightOverlay", "uSeed");
-        refreshDiagnostics({ force: true });
+        refreshDiagnostics();
       });
     }
   }
@@ -682,14 +1057,22 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     createStatsGroups(initialStats).forEach((group) => {
       const key = diagnosticsKey(group.title);
       diagnosticState[key] = group.lines.join("\n");
-      const folder = page.addFolder({ title: group.title, expanded: group.title === "GPU Stats" || group.title === "Layers" });
+      const folder = page.addFolder({
+        title: group.title,
+        expanded: key === FRAME_PACING_DIAGNOSTIC_KEY || key === PERF_PROBE_DIAGNOSTIC_KEY,
+      });
+      folder.on("fold", () => {
+        if (folder.expanded) {
+          refreshDiagnostics({ force: true, keys: new Set([key]) });
+        }
+      });
       const binding = folder.addBinding(diagnosticState, key, {
         label: null as unknown as string,
         readonly: true,
         multiline: true,
         rows: statsBindingRows(group.lines),
       });
-      diagnosticBindings.set(key, binding);
+      diagnosticBindings.set(key, { binding, folder, lastRefreshAt: 0 });
     });
   }
 
@@ -704,6 +1087,55 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
       interval: 100,
     });
 
+    const clipping = pane.addFolder({ title: "Clipping", expanded: false });
+    const presetBinding = clipping.addBinding(clippingState, "preset", {
+      label: "Preset",
+      options: {
+        ...Object.fromEntries(Object.keys(CLIPPING_PRESETS).map((name) => [name, name])),
+        Custom: "Custom",
+      },
+    });
+    clippingBindings.set("preset", presetBinding);
+    presetBinding.on("change", (event) => {
+      const presetName = String(event.value);
+      const preset = CLIPPING_PRESETS[presetName as keyof typeof CLIPPING_PRESETS];
+      if (!preset) return;
+      setClippingValues(preset, 180, presetName);
+    });
+
+    const clippingRanges: Array<{
+      key: BakeCoverageKey;
+      label: string;
+      min: number;
+      max: number;
+      step: number;
+    }> = [
+      { key: "azimuthCenterDeg", label: "Az Center", min: -180, max: 180, step: 1 },
+      { key: "altitudeCenterDeg", label: "Alt Center", min: -90, max: 90, step: 1 },
+      { key: "azimuthSpanDeg", label: "Azimuth", min: 1, max: 360, step: 1 },
+      { key: "altitudeSpanDeg", label: "Altitude", min: 1, max: 180, step: 1 },
+    ];
+    clippingRanges.forEach((control) => {
+      const binding = clipping.addBinding(clippingState, control.key, {
+        label: control.label,
+        min: control.min,
+        max: control.max,
+        step: control.step,
+        format: (value) => `${Number(value).toFixed(0)}deg`,
+      });
+      clippingBindings.set(control.key, binding);
+      binding.on("change", (event) => {
+        if (syncingClippingState || applyingClippingPreset) return;
+        clippingState.preset = "Custom";
+        syncClippingBinding("preset");
+        const nextValue = Number(event.value);
+        if (!Number.isFinite(nextValue)) return;
+        starfield.setBakeCoverageParam(control.key, nextValue, 450);
+        syncClippingStateFromRuntime();
+        refreshDiagnostics();
+      });
+    });
+
     const tabs = pane.addTab({
       pages: [
         ...LAYER_TABS.map((layer) => ({ title: layer.label })),
@@ -711,7 +1143,17 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
       ],
     });
     LAYER_TABS.forEach((layer, index) => buildLayerPage(tabs.pages[index], layer));
-    buildDiagnosticsPage(tabs.pages[LAYER_TABS.length]);
+    diagnosticsPage = tabs.pages[LAYER_TABS.length];
+    buildDiagnosticsPage(diagnosticsPage);
+    tabs.on("select", (event) => {
+      diagnosticsTabSelected = event.index === LAYER_TABS.length;
+      clearTimeout(statsRefreshTimer);
+      statsRefreshTimer = 0;
+      if (diagnosticsTabSelected) {
+        lastStatsRefreshAt = 0;
+        refreshDiagnostics({ force: true });
+      }
+    });
     syncOverlayControls();
 
     const actions = pane.addFolder({ title: "Actions", expanded: true });
@@ -719,13 +1161,25 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     bakeButton = actions.addButton({ title: "Bake" });
     bakeButton.on("click", () => starfield.bakeNow());
     actions.addButton({ title: "Recenter" }).on("click", onRecenter);
+    perfProbeButton = actions.addButton({ title: "Run Perf Probe" });
+    perfProbeButton.on("click", () => {
+      void runPerfProbe();
+    });
+    actions.addButton({ title: "Reset Perf" }).on("click", () => {
+      resetPerformanceHistory();
+      refreshDiagnostics({ force: true });
+    });
   }
 
   function printGpuStats(): void {
     setUxVisible(true);
+    if (diagnosticsPage) {
+      diagnosticsPage.selected = true;
+      diagnosticsTabSelected = true;
+    }
     const stats = collectStatsForPane({ detail: "debug" });
     window.lastStarfieldGpuStats = stats;
-    updateDiagnostics(stats);
+    updateDiagnostics(stats, { force: true });
     console.groupCollapsed("[Starfield GPU Stats]");
     console.table(stats);
     console.groupEnd();
@@ -745,6 +1199,7 @@ export function createControls({ container, starfield, gpuStarfield, getStats, o
     printGpuStats,
     dispose() {
       clearTimeout(statsRefreshTimer);
+      clearTimeout(clippingPresetTimer);
       document.removeEventListener("keydown", handleUxHotkey, true);
       document.body.classList.remove("is-ux-hidden");
       pane.dispose();

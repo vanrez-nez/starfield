@@ -21,6 +21,13 @@ export interface Size2 {
   height: number;
 }
 
+export interface BakeCoverage {
+  azimuthCenterDeg: number;
+  altitudeCenterDeg: number;
+  azimuthSpanDeg: number;
+  altitudeSpanDeg: number;
+}
+
 export interface BucketSize extends Size2 {
   bucket: number;
 }
@@ -36,6 +43,11 @@ export interface PatchLayout {
   contentHeight: number;
   storageWidth: number;
   storageHeight: number;
+  coverage: BakeCoverage;
+  coverageUvMin: THREE.Vector2;
+  coverageUvSize: THREE.Vector2;
+  coverageFraction: number;
+  wrapsHorizontally: boolean;
   autoLayout: boolean;
   autoLayoutReason: string;
   autoLayoutDemand: unknown;
@@ -115,6 +127,10 @@ export interface PatchDescriptor {
   centerUv: THREE.Vector2;
   centerDirection: THREE.Vector3;
   logicalSize: Size2;
+  hasLeftNeighbor: boolean;
+  hasRightNeighbor: boolean;
+  hasTopNeighbor: boolean;
+  hasBottomNeighbor: boolean;
   storageUvMin: THREE.Vector2;
   storageUvSize: THREE.Vector2;
   innerOffset: THREE.Vector2;

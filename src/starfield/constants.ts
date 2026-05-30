@@ -29,6 +29,7 @@ export const STAR_CATALOG_BASE_DENSITY = STARFIELD_CONFIG.internal.starCatalogBa
 export const BRIGHT_STAR_OVERLAY_ENABLED = STARFIELD_CONFIG.internal.brightStarOverlayEnabled;
 export const BRIGHT_STAR_OVERLAY_EXCLUDES_BAKED_STARS = STARFIELD_CONFIG.internal.brightStarOverlayExcludesBakedStars;
 export const BRIGHT_STAR_OVERLAY_STRENGTH = STARFIELD_CONFIG.internal.brightStarOverlayStrength;
+export const FOREGROUND_OVERLAY_MAX_STARS = STARFIELD_CONFIG.internal.foregroundOverlayMaxStars;
 export const WINKLE_MAX_COUNT = STARFIELD_CONFIG.internal.winkleMaxCount;
 export const MAX_BAKE_JOBS_PER_FRAME = STARFIELD_CONFIG.internal.maxBakeJobsPerFrame;
 export const CAMERA_BAKE_IDLE_MS = STARFIELD_CONFIG.internal.cameraBakeIdleMs;
